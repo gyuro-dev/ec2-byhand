@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Describe",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances", "ec2:DescribeImages", "ec2:DescribeSnapshots"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SnapshotTheInstance",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSnapshots",
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:volume/*",
+        "arn:aws:ec2:*::snapshot/*"
+      ]
+    },
+    {
+      "Sid": "TagOnlyWhatItSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Condition": {"StringEquals": {"ec2:CreateAction": "CreateSnapshots"}}
+    },
+    {
+      "Sid": "DeleteOnlyItsOwnSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSnapshot",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Condition": {"Null": {"aws:ResourceTag/ec2-byhand": "false"}}
+    },
+    {
+      "Sid": "ReadSnapshotBlocks",
+      "Effect": "Allow",
+      "Action": ["ebs:ListSnapshotBlocks", "ebs:GetSnapshotBlock"],
+      "Resource": "arn:aws:ec2:*::snapshot/*"
+    }
+  ]
+}

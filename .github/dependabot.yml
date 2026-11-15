@@ -1,0 +1,27 @@
+# Dependabot: keep dependencies and GitHub Actions up to date.
+#
+# cooldown waits a few days before proposing a new release, so that a compromised release
+# that is pulled soon after publication is less likely to be picked up. Security updates
+# are not delayed.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]

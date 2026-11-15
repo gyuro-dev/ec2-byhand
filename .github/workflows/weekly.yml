@@ -1,0 +1,80 @@
+# Weekly checks that do not block pull requests. A failure here blocks nothing; GitHub
+# mails the failure of a scheduled run.
+#
+# - golden: builds the golden disk images on the runner (tools/golden/*.sh: loop mounts
+#   as root, Docker for the distributions' package databases and mkfs defaults) and runs
+#   every test with them, the end-to-end ones included. ci.yml runs without the images,
+#   so the parsers are checked against real filesystems here. The XFS v4 images are not
+#   built (they need a virtual machine: tools/golden/vm_almalinux8.sh); their tests skip.
+# - macos: the tests on macOS. Not in ci.yml because GitHub's macOS runners are scarce,
+#   and the code has no macOS-only paths (Linux covers POSIX).
+#
+# For safety: as ci.yml (actions pinned to SHAs, read-only token, no credentials kept by
+# checkout). The golden job runs the repository's own scripts as root on a throw-away
+# runner; it has no secrets and no write permissions.
+name: Weekly
+
+on:
+  schedule:
+    - cron: "37 3 * * 1" # Mondays 03:37 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.4"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  golden:
+    name: Test with the golden images (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: false
+      - run: sudo apt-get update && sudo apt-get install -y gdisk lvm2 xfsprogs acl dosfstools
+      - name: Build the golden images
+        run: |
+          for script in partition lvm fs dirty system vfat pkgdb vercmp verify; do
+            echo "::group::build_$script.sh"
+            sudo bash "tools/golden/build_$script.sh" tests/golden/out
+            echo "::endgroup::"
+          done
+          sudo chown -R "$(id -u):$(id -g)" tests/golden/out
+          ls tests/golden/out | head -n 80
+      - run: uv sync --frozen --group integration
+      - run: uv run --no-sync pytest -p no:cacheprovider
+
+  macos:
+    name: Test (macos-15, Python ${{ matrix.python }})
+    runs-on: macos-15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.15"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+          enable-cache: false
+      - run: uv sync --frozen --group integration
+      - run: uv run --no-sync pytest -p no:cacheprovider

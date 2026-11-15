@@ -1,0 +1,21 @@
+# case: user_exclude
+# command: ec2-byhand --current-image '{casebook_dir}/golden/out/verify-al2023.img' --baseline-image '{casebook_dir}/golden/out/verify-al2023-before.img' --exclude '/opt/**' --no-archives -o out
+# exit_code: 0
+----- stdout -----
+manifest:              out/manifest.json
+report:                out/report.txt
+baseline:              {casebook_dir}/golden/out/verify-al2023-before.img
+changed between:       2026-10-24 13:10 and 2026-10-24 13:11 UTC (last change of each)
+hand-placed:           10
+modified package files:   10 (6 since baseline)
+deleted:               0
+packages:              110 installed, +3 -0 ^0 v0
+language packages:     5
+package scripts:       0 files
+alternatives:          1
+services:              1
+noise:                 629
+warning: unresolved-mount (current / LABEL=/): device not found among the scanned volumes
+warning: unresolved-mount (baseline / LABEL=/): device not found among the scanned volumes
+----- stderr -----
+ec2-byhand: will read up to 1.9 MiB in 137 files that no package owns

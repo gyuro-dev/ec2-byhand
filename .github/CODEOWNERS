@@ -1,0 +1,4 @@
+# Owners who review changes. Once the rulesets require a code owner's review, changes to
+# workflows and the other files under .github/ always need the owner's.
+*         @gyuro-dev
+/.github/ @gyuro-dev

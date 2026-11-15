@@ -1,0 +1,110 @@
+# Publish to TestPyPI and then PyPI when a v* tag is pushed (Trusted Publishing: no
+# tokens), then create the GitHub release with the notes from CHANGELOG.md.
+#
+# For safety:
+# - only the owner can create v* tags (ruleset "release tags")
+# - the environments testpypi / pypi require the owner's approval and accept only v* tags
+# - id-token: write is given only to the upload jobs; the build job has no cache (a
+#   poisoned cache could otherwise end up in the package)
+# - contents: write is given only to the release job, which runs after PyPI and only
+#   creates the release for the existing tag (it cannot create or move tags)
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+# Never two releases at the same time.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.13.4"
+
+jobs:
+  build:
+    name: Build the distributions
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: false
+      # The tag must name the version pyproject.toml has (the one place it is written).
+      - env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(uv run --no-project python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")
+          echo "tag: $TAG / version: $version"
+          test "$TAG" = "v$version"
+      # CHANGELOG.md must have the version's section: the release notes are made from it.
+      - env:
+          TAG: ${{ github.ref_name }}
+        run: uv run --no-project python scripts/release_notes.py "$TAG"
+      - run: uv build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ec2-byhand
+    permissions:
+      id-token: write # Trusted Publishing: a short-lived token from PyPI
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    name: Publish to PyPI
+    needs: testpypi
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ec2-byhand
+    permissions:
+      id-token: write # Trusted Publishing: a short-lived token from PyPI
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  release:
+    name: Create the GitHub release
+    needs: pypi
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the release for the tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/release_notes.py "$TAG" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"

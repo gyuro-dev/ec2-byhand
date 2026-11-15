@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/gyuro-dev/pytest-casebook/main/src/pytest_casebook/casebook.schema.json
+# build_verify.sh の before/after イメージ（AL2023）に対する end-to-end。
+# 仕込んだ手作業（scenario.txt）だけが検出されることの要約を golden で固定する。
+# イメージが無い環境では conftest.py が skip にする（他の golden テストと同じ扱い）。
+title: ec2-byhand（AL2023 検証イメージ）
+levels: [カテゴリ, 項目]
+command_prefix: ec2-byhand
+
+normalize:
+  # Windows では出力パスが out\manifest.json になるので golden は / に統一する
+  - {pattern: 'out\\manifest\.json', replace: out/manifest.json}
+  - {pattern: 'out\\report\.txt', replace: out/report.txt}
+
+cases:
+  - group: 解析
+    description: before/after イメージの比較
+    cases:
+      - name: with_baseline
+        description: baseline 付き。仕込んだ手作業だけが hand_placed / modified に出る
+        command: [--current-image, "{casebook_dir}/golden/out/verify-al2023.img",
+                  --baseline-image, "{casebook_dir}/golden/out/verify-al2023-before.img", -o, out]
+        setup: {files: {.keep: ""}}
+
+      - name: no_baseline
+        description: baseline 無し。AMI 由来のファイルも含まれる旨の警告が出る
+        command: [--current-image, "{casebook_dir}/golden/out/verify-al2023.img",
+                  --no-archives, -o, out]
+        setup: {files: {.keep: ""}}
+
+      - name: user_exclude
+        description: --exclude がノイズ規則 user-exclude として効き、hand_placed が減る
+        command: [--current-image, "{casebook_dir}/golden/out/verify-al2023.img",
+                  --baseline-image, "{casebook_dir}/golden/out/verify-al2023-before.img",
+                  --exclude, "/opt/**", --no-archives, -o, out]
+        setup: {files: {.keep: ""}}
