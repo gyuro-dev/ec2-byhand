@@ -68,12 +68,16 @@ for name in "${cases[@]}"; do
     # before the image is made.
     mkdir "$work/root/.golden"
     cp "$here/verify_chroot.sh" "$work/root/.golden/"
-    # Nothing is mounted on /dev in the chroot: where the tree has no /dev/null, the
-    # script's "2> /dev/null" makes a regular file, which is not part of the scenario.
+    # Nothing is mounted on /dev in the chroot: where the tree has no /dev/null (it
+    # depends on the Docker that exported it), the script's "2> /dev/null" makes a
+    # regular file, which is not part of the scenario: out of the tree and of the list.
     had_null=0
     if [ -e "$work/root/dev/null" ]; then had_null=1; fi
     chroot "$work/root" bash /.golden/verify_chroot.sh /.golden
-    if [ "$had_null" = 0 ]; then rm -f "$work/root/dev/null"; fi
+    if [ "$had_null" = 0 ]; then
+        rm -f "$work/root/dev/null"
+        sed -i '/^\/dev\/null$/d' "$work/root/.golden/unowned.txt"
+    fi
     mv "$work/root/.golden/verify.txt" "$work/root/.golden/unowned.txt" "$dest/"
     rm -rf "$work/root/.golden"
     # mkfs.ext4 -d adds /lost+found, which no package owns either.
