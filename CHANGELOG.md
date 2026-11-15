@@ -7,17 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-15
+
 ### Changed
 
-- When the baseline AMI is public and so cannot be read, the error now ends with the
-  `aws ec2 copy-image` command to run, filled in with the AMI, the region and the
-  profile of the run, on a line of its own.
-- README: the quick start shows the command with a baseline and the one without, and
-  says that a public launch AMI (Amazon Linux, Ubuntu, ...) has to be copied first; the
-  steps are under "Choosing the baseline". It also gives a rough cost and time.
+- README: a rough cost and time of a run, near the top.
 
 ### Fixed
 
+- The first run on a server launched from a public AMI (Amazon Linux, Ubuntu, ...).
+  AWS does not let the snapshots behind a public AMI be read, so the quick start's
+  command ended in an error there.
+  - README: the quick start shows the command with a baseline and the one without, and
+    says that a public AMI has to be copied first; the steps are under "Choosing the
+    baseline".
+  - The error now ends with the `aws ec2 copy-image` command to run, on a line of its
+    own, filled in with the AMI, the region and the profile of the run.
 - README: the link to "What is reported and what is not" did nothing on the PyPI page.
 
 ## [0.1.0] - 2026-11-15
@@ -45,5 +50,6 @@ The first release.
   GPT / MBR and FAT (the `diskread` package).
 - Messages in English and Japanese (`EC2_BYHAND_LANG`).
 
-[Unreleased]: https://github.com/gyuro-dev/ec2-byhand/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gyuro-dev/ec2-byhand/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/gyuro-dev/ec2-byhand/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gyuro-dev/ec2-byhand/releases/tag/v0.1.0
