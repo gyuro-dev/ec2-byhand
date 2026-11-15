@@ -10,6 +10,10 @@ normalize:
   # Windows では出力パスが out\manifest.json になるので golden は / に統一する
   - {pattern: 'out\\manifest\.json', replace: out/manifest.json}
   - {pattern: 'out\\report\.txt', replace: out/report.txt}
+  # イメージを作った日時と環境（Docker が足すファイルの数）で変わる値は固定しない
+  - {pattern: 'changed between: +\d{4}-\d\d-\d\d \d\d:\d\d and \d{4}-\d\d-\d\d \d\d:\d\d UTC',
+     replace: 'changed between:       DATE and DATE UTC'}
+  - {pattern: 'noise: +\d+', replace: 'noise:                 N'}
 
 cases:
   - group: 解析

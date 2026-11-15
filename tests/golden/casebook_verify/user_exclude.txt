@@ -5,7 +5,7 @@
 manifest:              out/manifest.json
 report:                out/report.txt
 baseline:              {casebook_dir}/golden/out/verify-al2023-before.img
-changed between:       2026-10-24 13:10 and 2026-10-24 13:11 UTC (last change of each)
+changed between:       DATE and DATE UTC (last change of each)
 hand-placed:           10
 modified package files:   10 (6 since baseline)
 deleted:               0
@@ -14,7 +14,7 @@ language packages:     5
 package scripts:       0 files
 alternatives:          1
 services:              1
-noise:                 629
+noise:                 N
 warning: unresolved-mount (current / LABEL=/): device not found among the scanned volumes
 warning: unresolved-mount (baseline / LABEL=/): device not found among the scanned volumes
 ----- stderr -----
