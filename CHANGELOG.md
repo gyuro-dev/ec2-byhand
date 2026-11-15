@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- README: the quick start shows the command with a baseline and the one without, and
+  says that a public launch AMI (Amazon Linux, Ubuntu, ...) has to be copied first; the
+  steps are under "Choosing the baseline".
+
 ### Fixed
 
 - README: the link to "What is reported and what is not" did nothing on the PyPI page.
