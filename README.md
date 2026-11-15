@@ -33,6 +33,10 @@ out/
 
 It needs Python 3.12 or later. Credentials and region come from the same configuration the AWS CLI uses ([Permissions](#permissions)).
 
+**Cost and time, roughly**: about 0.03 USD and 3 to 4 minutes, as measured on an Amazon Linux 2023 server with three volumes (117 GiB in all) and about 55,000 files; a run that writes the lists only read 4.5 GiB.
+The cost is mostly the EBS direct API reads, around 0.003 USD per 1,000 blocks (about 500 MiB). The snapshots are stored, and charged, only for the minutes of the run.
+How much is read, and how long it takes, depends on the amount of files, not on the size of the volumes. A volume that has never had a snapshot adds the wait for its first one. Data directories can be left out with `--exclude`.
+
 ## What it finds and extracts
 
 What changes by itself (logs, caches: `/var/log`, `/tmp`, `/var/cache` and the like) is left out.
@@ -207,6 +211,7 @@ What cloud-init did at first boot is in the backup as well, so it no longer show
 
 **Public AMIs**: the EBS direct APIs do not read the snapshots behind a public AMI (AWS answers `Public snapshots are not supported`).
 Copy the AMI into your account and pass the copy with `--baseline-ami`, or use `--no-baseline`.
+The error ends with the `copy-image` command for that AMI and region.
 
 ```bash
 # 1. Find the AMI the instance was launched from

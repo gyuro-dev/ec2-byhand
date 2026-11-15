@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- When the baseline AMI is public and so cannot be read, the error now ends with the
+  `aws ec2 copy-image` command to run, filled in with the AMI, the region and the
+  profile of the run, on a line of its own.
 - README: the quick start shows the command with a baseline and the one without, and
   says that a public launch AMI (Amazon Linux, Ubuntu, ...) has to be copied first; the
-  steps are under "Choosing the baseline".
+  steps are under "Choosing the baseline". It also gives a rough cost and time.
 
 ### Fixed
 
