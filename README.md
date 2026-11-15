@@ -90,7 +90,7 @@ patches:               2
 | modified package files | files that differ from what their package installed (in brackets: changed since the AMI) |
 | deleted | hand-placed paths the AMI had and the server no longer has |
 | packages | how many are installed, and since the AMI: added (+), removed (-), upgraded (^), downgraded (v) |
-| noise | paths left out of the lists; see [What is reported and what is not](#scope) |
+| noise | paths left out of the lists; see [What is reported and what is not](#what-is-reported-and-what-is-not) |
 
 <a id="scope"></a>
 
