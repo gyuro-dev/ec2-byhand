@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/gyuro-dev/pytest-casebook/main/src/pytest_casebook/casebook.schema.json
+# ec2-byhand CLI の入力検証。ディスクイメージ無しで動くケースだけを置く
+# （イメージを使う end-to-end は casebook_verify.yaml）。
+title: ec2-byhand CLI の入力検証
+levels: [カテゴリ, 項目]
+command_prefix: ec2-byhand
+
+cases:
+  - group: 使い方エラー
+    description: 引数とオプションの検証
+    cases:
+      - name: missing_current
+        description: 現在側（--instance-id など）の指定が無いと usage エラー
+        command: -o out
+        expect:
+          exit_code: 2
+          stderr: {contains: "--current-image"}
+
+      - name: image_not_found
+        description: 存在しないイメージはエラーで終了コード 2
+        command: --current-image nope.img -o out
+        setup: {files: {.keep: ""}}
+        expect:
+          exit_code: 2
+          stderr: {contains: "no such image file"}
+
+      - name: output_is_file
+        description: -o がファイルを指すと usage エラー（トレースバックを出さない）
+        command: --current-image nope.img -o outfile.txt
+        setup:
+          files:
+            outfile.txt: 既にあるファイル
+        expect:
+          exit_code: 2
+          stderr: {contains: "not a directory"}
+
+      - name: output_not_empty
+        description: 中身のある出力先は --force が無ければ拒否
+        command: --current-image nope.img -o out
+        setup:
+          files:
+            out/keep.txt: 既にある出力
+        expect:
+          exit_code: 2
+          stderr: {contains: "--force"}
+
+      - name: bad_max_file_size
+        description: --max-file-size は 500K / 100M / 2G 形式のみ
+        command: --current-image nope.img -o out --max-file-size huge
+        expect:
+          exit_code: 2
+          stderr: {contains: "not a size"}

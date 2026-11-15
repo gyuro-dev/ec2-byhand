@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venvs/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.idea/
+.vscode/
+tests/golden/out/
+reports/
+.claude/
+# Notes and work in progress stay on this machine (design notes, the task list).
+# What a user needs of docs/ is tracked by name.
+docs/*
+!docs/iam-policy.json
+!docs/iam-policy-upload.json

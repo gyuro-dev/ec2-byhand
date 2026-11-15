@@ -1,0 +1,184 @@
+# CI: lint, type check, workflow security check, and the tests on Linux and Windows.
+# "CI result" is the single check the main ruleset requires.
+#
+# The tests run without the golden disk images (built as root by tools/golden/*.sh, not
+# committed): what needs one is skipped here, and weekly.yml builds them and runs it all.
+# macOS is tested there too (GitHub's macOS runners are scarce: a queue there should not
+# block pull requests).
+#
+# Documentation-only changes (*.md other than the READMEs and the changelog) skip the test
+# matrix; lint and zizmor always run. The workflow itself always runs, so the required
+# "CI result" is always reported (with paths-ignore it would never arrive and the pull
+# request could not be merged).
+#
+# For safety:
+# - every action is pinned to a commit SHA (tags can be moved)
+# - the token is read-only by default; each job gets only what it needs
+# - no pull_request_target, and checkout does not keep credentials
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.4"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # code=false only when every changed file is documentation. Anything unknown (a manual
+      # run, the first push of a branch) counts as code, so the tests run.
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            range="$BASE...HEAD"
+          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            range="$BEFORE..HEAD"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The diff goes into a variable first: a git diff that fails inside `< <(...)` would
+          # not stop the step and would look like "no changes" (code=false).
+          if ! files="$(git diff --name-only "$range")" || [ -z "$files" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              # Tests read these: the READMEs' example is run (tests/test_cli.py), the
+              # changelog's form is checked (tests/test_release_notes.py).
+              README.md | README.ja.md | CHANGELOG.md) echo "code: $file"; code=true ;;
+              *.md) echo "docs: $file" ;;
+              *) echo "code: $file"; code=true ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint (ruff, mypy)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync mypy
+
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # zizmor reads workflow runs for its online audits
+      security-events: write # upload the findings to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          # The findings go to code scanning where the repository has it (a public
+          # one). A private one has none, and the upload would fail the job: there the
+          # findings are printed, and any finding fails the job.
+          advanced-security: ${{ !github.event.repository.private }}
+
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        python: ["3.12", "3.13", "3.14", "3.15"]
+        include:
+          - {os: windows-2025, python: "3.12"}
+          - {os: windows-2025, python: "3.15"}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+      # With moto on the oldest Python: the S3 upload runs against it, no account needed.
+      # The newer ones run without (those tests skip), so that a missing wheel of one of
+      # moto's many dependencies cannot fail the run.
+      - if: matrix.python == '3.12'
+        run: uv sync --frozen --group integration
+      - if: matrix.python != '3.12'
+        run: uv sync --frozen
+      - run: uv run --no-sync python -c "import sys, boto3; print(sys.version, boto3.__version__)"
+      - run: uv run --no-sync pytest -p no:cacheprovider
+      # The package builds, and its command starts once installed from the wheel alone.
+      - if: matrix.python == '3.12'
+        run: |
+          uv build --out-dir "$RUNNER_TEMP/dist"
+          uv run --isolated --no-project --with "$(ls "$RUNNER_TEMP"/dist/*.whl)" ec2-byhand --version
+
+  result:
+    name: CI result
+    if: always()
+    needs: [changes, lint, zizmor, test]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      # "skipped" is fine (the tests skip on documentation-only changes), but the change
+      # detection itself must succeed: if it failed, they were skipped for the wrong reason.
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "changes: $CHANGES / results: $RESULTS"
+          if [ "$CHANGES" != "success" ]; then
+            echo "the change detection did not succeed: $CHANGES"
+            exit 1
+          fi
+          for r in $RESULTS; do
+            case "$r" in
+              success | skipped) ;;
+              *) echo "a required job did not succeed: $r"; exit 1 ;;
+            esac
+          done

@@ -1,0 +1,105 @@
+[project]
+name = "ec2-byhand"
+version = "0.1.0"
+description = "Extract hand-placed and hand-modified files from EC2 EBS snapshots without logging in"
+readme = "README.md"
+authors = [
+    { name = "gyuro", email = "344015443+gyuro-dev@users.noreply.github.com" }
+]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Natural Language :: English",
+    "Natural Language :: Japanese",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: System :: Systems Administration",
+    "Topic :: System :: Filesystems",
+    "Typing :: Typed",
+]
+keywords = ["aws", "ec2", "ebs", "snapshot", "configuration-drift", "migration"]
+dependencies = [
+    "boto3[crt]>=1.43.118",
+]
+
+[project.urls]
+Homepage = "https://github.com/gyuro-dev/ec2-byhand"
+Repository = "https://github.com/gyuro-dev/ec2-byhand"
+Issues = "https://github.com/gyuro-dev/ec2-byhand/issues"
+Changelog = "https://github.com/gyuro-dev/ec2-byhand/blob/main/CHANGELOG.md"
+
+[project.scripts]
+ec2-byhand = "ec2_byhand.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.4,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["ec2_byhand", "diskread"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-casebook>=0.10.0",
+    "ruff>=0.14.0",
+    "mypy>=1.18",
+]
+integration = [
+    "moto[ebs,ec2]>=5.2.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# history_truth.py は AL2 の yum（Python 2.7）で動かすスクリプトなので対象外。
+exclude = ["tools/golden/history_truth.py"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "N", "PT", "PIE",
+    "PTH", "RET", "PERF", "PGH", "ISC", "TID", "BLE",
+]
+# RUF001/002/003: 日本語の文中の全角記号への指摘のため外す（repo-rules.md と同じ）。
+# N818: 例外は内容で名付けたい（_Dirty など）ので repo-rules.md と同じく外す。
+ignore = ["RUF001", "RUF002", "RUF003", "N818"]
+
+[tool.ruff.lint.per-file-ignores]
+# boto3 の API を模したスタブなので、引数名・クラス名は boto3 の流儀のまま。
+"tests/test_aws.py" = ["N801", "N803"]
+# WSL の root で golden イメージを作るスクリプト。pathlib に無い chown・mknod と
+# 混ざるので os.* のままにする（書き換えてもここのテストでは検証できない）。
+"tools/golden/*.py" = ["PTH"]
+# モンキーテストのインスタンスで root として動く（AL2023 の Python 3.9）。chown・link・
+# mkfifo と混ざるので同じく os.* のまま。何が起きても結果を残すため広く例外を受ける。
+"tools/monkey/monkey.py" = ["PTH", "BLE"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+# boto3 / botocore は型スタブを入れていないので import だけ許す。
+module = ["boto3", "boto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--tb=short"]
+# integration: the integration dependency group (moto) is needed; skipped without it.
+markers = ["integration: needs the integration dependency group (uv sync --group integration)"]
+casebook_lang = "ja"
+# ケースファイルごとの試験項目表（--casebook-html は従来どおり全体を 1 枚に出す）。
+casebook_html_reports = [
+    "reports/casebook_cli.html = tests/casebook_cli.yaml",
+    "reports/casebook_verify.html = tests/casebook_verify.yaml",
+]
