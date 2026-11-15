@@ -28,10 +28,16 @@ TAG_KEY = "ec2-byhand"
 
 
 class AwsSourceError(Exception):
-    """The instance, image or snapshots cannot be used (message says why).
+    """The instance, image or snapshots cannot be used (message says why). `command`,
+    when given, is a command to run next, to be shown on a line of its own.
 
     そのインスタンス・イメージ・スナップショットは使えない（理由はメッセージにある）。
+    `command` があれば、次に実行するコマンド。1 行に分けて表示するためのもの。
     """
+
+    def __init__(self, message: str, command: str = "") -> None:
+        super().__init__(message)
+        self.command = command
 
 
 @dataclass(frozen=True)

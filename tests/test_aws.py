@@ -605,7 +605,8 @@ def test_unreadable_public_ami_snapshot_is_explained(
     )
     ebs = DeniedEbs(code, message)
     monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, ebs))
-    assert cli.main(["--instance-id", "i-0abc", "-o", str(tmp_path / "o"), "-q"]) == 2
+    argv = ["--instance-id", "i-0abc", "-o", str(tmp_path / "o"), "-q", "--profile", "my work"]
+    assert cli.main(argv) == 2
     err = capsys.readouterr().err
     assert "snap-ami" in err
     assert reason in err
@@ -613,6 +614,29 @@ def test_unreadable_public_ami_snapshot_is_explained(
     assert "--baseline-ami" in err  # a running server cannot be launched again from a copy
     assert "--no-baseline" in err
     assert "launch" not in err
+    # For a public AMI, the command to copy follows on a line of its own: this AMI, this
+    # run's region and profile.
+    command = (
+        "    aws ec2 copy-image --profile 'my work' --region us-east-1 --source-region us-east-1 "
+        "--source-image-id ami-0base --name ec2-byhand-baseline"
+    )
+    lines = err.splitlines()
+    assert lines[0].startswith("ec2-byhand: error: baseline: cannot read the blocks of snap-ami")
+    assert lines[1:] == ([command] if code == "ValidationException" else [])
+
+
+def test_public_baseline_snapshot_given_by_id_has_no_ami_to_copy(
+    ec2, monkeypatch, tmp_path: Path, capsys
+) -> None:
+    client, _stub = ec2
+    ebs = DeniedEbs("ValidationException", "Public snapshots are not supported")
+    monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, ebs))
+    argv = ["--current-snapshot", "snap-a", "--baseline-snapshot", "snap-b", "-o"]
+    assert cli.main([*argv, str(tmp_path / "o"), "-q"]) == 2
+    err = capsys.readouterr().err
+    # The current side is read first and fails the same way: nothing to copy is named.
+    assert "public snapshot" in err
+    assert "--source-image-id" not in err
 
 
 def test_one_failed_delete_does_not_leave_the_rest_behind(ec2) -> None:

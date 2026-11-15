@@ -10,10 +10,18 @@ EC2 インスタンス（または EBS スナップショット）を起動元�
 
 ```bash
 pip install ec2-byhand
+
+# 比較対象を指定する: バックアップのスナップショットと比べる
+ec2-byhand --instance-id i-0123456789abcdef0 --baseline-snapshot snap-0123456789abcdef0 -o out/
+
+# 比較対象を指定しない: 起動元の AMI と比べる
 ec2-byhand --instance-id i-0123456789abcdef0 -o out/
 ```
 
-この 1 コマンドで、スナップショットを作り、起動元の AMI と比べ、作ったスナップショットを消す。結果は `out/` に出る。
+どちらも、スナップショットを作り、比較対象と比べ、作ったスナップショットを消す。結果は `out/` に出る。
+
+比較対象を指定しない場合の補足: 起動元が Amazon Linux や Ubuntu などの**公開 AMI** だと、エラーになる。
+公開 AMI のスナップショットは、AWS の制限で直接読めない。AMI を自分のアカウントにコピーして `--baseline-ami` で渡す（[手順](#比較対象baselineの選び方)）。自分で作った AMI なら、そのまま通る。
 
 ```text
 out/
@@ -25,6 +33,10 @@ out/
 ```
 
 Python 3.12 以上が必要。認証情報とリージョンは AWS CLI と同じ設定から取る（[必要な権限](#permissions)）。
+
+**料金と時間の目安**: 実測で約 0.03 USD、3〜4 分（ボリューム 3 本で計 117 GiB、ファイル約 5.5 万個の Amazon Linux 2023。一覧だけを出す実行で 4.5 GiB を読んだ）。\
+料金は主に EBS direct API の読み出しで、1,000 ブロック（約 500 MiB）あたり 0.003 USD ほど。スナップショットの保管料金は、実行中の数分ぶんだけ。\
+読む量と時間は、ボリュームの大きさではなくファイルの量で決まる。初めてスナップショットを取るボリュームでは、その完了待ちが加わる。データのディレクトリは `--exclude` で外せる。
 
 ## 取り出せるもの
 
@@ -144,7 +156,7 @@ ec2-byhand --current-image server-root.img server-data.img --baseline-image ami-
 
 | | 現在のサーバー | 比較対象（baseline） |
 |---|---|---|
-| インスタンス | `--instance-id` | 既定で起動元の AMI |
+| インスタンス | `--instance-id` | 既定で起動元の AMI（公開 AMI は[コピーが必要](#比較対象baselineの選び方)） |
 | AMI | | `--baseline-ami` |
 | スナップショット | `--current-snapshot` | `--baseline-snapshot` |
 | ディスクイメージ | `--current-image` | `--baseline-image` |
@@ -200,8 +212,22 @@ manifest.json はプログラムが読むデータなので、どちらでも英
 cloud-init が初回起動時に行ったことはバックアップにも入っているので、結果には出なくなる。
 
 **公開 AMI**: 公開 AMI のスナップショットは EBS direct API で読めない（AWS は `Public snapshots are not supported` と返す）。\
-`aws ec2 copy-image` で自分のアカウントにコピーして `--baseline-ami <コピー先>` で渡すか、\
-`--no-baseline` を付ける。\
+自分のアカウントにコピーして `--baseline-ami <コピー先>` で渡すか、`--no-baseline` を付ける。\
+エラーの最後に、その AMI とリージョンを入れた `copy-image` のコマンドが出る。
+
+```bash
+# 1. 起動元の AMI を調べる
+aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --query 'Reservations[].Instances[].ImageId' --output text
+
+# 2. 自分のアカウントにコピーして、完了を待つ（数分）
+aws ec2 copy-image --source-region ap-northeast-1 --source-image-id ami-0aaaaaaaaaaaaaaaa --name ec2-byhand-baseline
+aws ec2 wait image-available --image-ids ami-0bbbbbbbbbbbbbbbb
+
+# 3. コピーした AMI と比べる
+ec2-byhand --instance-id i-0123456789abcdef0 --baseline-ami ami-0bbbbbbbbbbbbbbbb -o out/
+```
+
+コピーした AMI は、使い終わったら `aws ec2 deregister-image` で登録を解除し、そのスナップショットを `aws ec2 delete-snapshot` で消す。\
 Red Hat の RHEL の AMI はコピーできない（`You do not have permission to access the storage of this ami`）ので、`--no-baseline` を使う。
 
 **dpkg（Ubuntu / Debian）**: dpkg は権限・所有者・リンク先を記録しないので、baseline のファイルと比べるのは、両側で同じバージョンのパッケージのファイルだけ。\

@@ -82,6 +82,12 @@ TEXTS: dict[str, dict[str, str]] = {
             "with --baseline-ami, pass snapshots you own with --baseline-snapshot, "
             "or compare with nothing using --no-baseline."
         ),
+        "blocks_copy_ami": (
+            " Copy the AMI into this account with the command below; it prints the id "
+            "of the copy. When the copy is available (minutes), run this again with "
+            "--baseline-ami and that id. Or pass snapshots you own with "
+            "--baseline-snapshot, or compare with nothing using --no-baseline."
+        ),
         # --- progress ---
         "creating_snapshots": "creating snapshots of {instance} (CreateSnapshots)",
         "waiting_for_snapshots": (
@@ -297,6 +303,13 @@ TEXTS: dict[str, dict[str, str]] = {
             "AMI を自分のアカウントにコピーして（aws ec2 copy-image）--baseline-ami で渡すか、"
             "自分のスナップショットを --baseline-snapshot で渡すか、"
             "--no-baseline で比較なしにしてください。"
+        ),
+        "blocks_copy_ami": (
+            "下のコマンドで AMI を自分のアカウントにコピーしてください"
+            "（コピーの ID が表示されます）。"
+            "コピーが完了したら（数分）、その ID を --baseline-ami で渡して、もう一度実行します。"
+            "自分のスナップショットを --baseline-snapshot で渡すか、"
+            "--no-baseline で比較なしにすることもできます。"
         ),
         # --- progress ---
         "creating_snapshots": "{instance} のスナップショットを作成します（CreateSnapshots）",

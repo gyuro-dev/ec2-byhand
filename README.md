@@ -10,10 +10,17 @@ No login to the server and no agent. It reads EBS snapshots directly, so a runni
 
 ```bash
 pip install ec2-byhand
+
+# With a baseline: compare with a backup snapshot
+ec2-byhand --instance-id i-0123456789abcdef0 --baseline-snapshot snap-0123456789abcdef0 -o out/
+
+# Without one: compare with the AMI the instance was launched from
 ec2-byhand --instance-id i-0123456789abcdef0 -o out/
 ```
 
-That one command takes the snapshots, compares them with the launch AMI and deletes the snapshots it made. The result is in `out/`.
+Both take the snapshots, compare them with the baseline and delete the snapshots they made. The result is in `out/`.
+
+A note on the second: when the launch AMI is a **public AMI** (Amazon Linux, Ubuntu, ...), it ends in an error. AWS does not let the snapshots behind a public AMI be read directly. Copy the AMI into your account and pass the copy with `--baseline-ami` ([the steps](#choosing-the-baseline)). An AMI of your own works as it is.
 
 ```text
 out/
@@ -25,6 +32,10 @@ out/
 ```
 
 It needs Python 3.12 or later. Credentials and region come from the same configuration the AWS CLI uses ([Permissions](#permissions)).
+
+**Cost and time, roughly**: about 0.03 USD and 3 to 4 minutes, as measured on an Amazon Linux 2023 server with three volumes (117 GiB in all) and about 55,000 files; a run that writes the lists only read 4.5 GiB.
+The cost is mostly the EBS direct API reads, around 0.003 USD per 1,000 blocks (about 500 MiB). The snapshots are stored, and charged, only for the minutes of the run.
+How much is read, and how long it takes, depends on the amount of files, not on the size of the volumes. A volume that has never had a snapshot adds the wait for its first one. Data directories can be left out with `--exclude`.
 
 ## What it finds and extracts
 
@@ -144,7 +155,7 @@ ec2-byhand --current-image server-root.img server-data.img --baseline-image ami-
 
 | | The server now | The baseline |
 |---|---|---|
-| An instance | `--instance-id` | its launch AMI, by default |
+| An instance | `--instance-id` | its launch AMI, by default (a public AMI [needs a copy](#choosing-the-baseline)) |
 | An AMI | | `--baseline-ami` |
 | Snapshots | `--current-snapshot` | `--baseline-snapshot` |
 | Disk images | `--current-image` | `--baseline-image` |
@@ -199,8 +210,22 @@ and `--current-snapshot snap-<newer> --baseline-snapshot snap-<older>` what was 
 What cloud-init did at first boot is in the backup as well, so it no longer shows.
 
 **Public AMIs**: the EBS direct APIs do not read the snapshots behind a public AMI (AWS answers `Public snapshots are not supported`).
-Copy the AMI into your account (`aws ec2 copy-image`) and pass the copy with `--baseline-ami`,
-or use `--no-baseline`.
+Copy the AMI into your account and pass the copy with `--baseline-ami`, or use `--no-baseline`.
+The error ends with the `copy-image` command for that AMI and region.
+
+```bash
+# 1. Find the AMI the instance was launched from
+aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --query 'Reservations[].Instances[].ImageId' --output text
+
+# 2. Copy it into your account and wait for the copy (minutes)
+aws ec2 copy-image --source-region us-east-1 --source-image-id ami-0aaaaaaaaaaaaaaaa --name ec2-byhand-baseline
+aws ec2 wait image-available --image-ids ami-0bbbbbbbbbbbbbbbb
+
+# 3. Compare with the copy
+ec2-byhand --instance-id i-0123456789abcdef0 --baseline-ami ami-0bbbbbbbbbbbbbbbb -o out/
+```
+
+When done with the copy, deregister it (`aws ec2 deregister-image`) and delete its snapshot (`aws ec2 delete-snapshot`).
 Red Hat's RHEL AMIs cannot be copied (`You do not have permission to access the storage of this ami`): use `--no-baseline` for them.
 
 **dpkg (Ubuntu / Debian)**: dpkg records no permissions, owners or link targets, so a package file is compared with the baseline's copy only when its package has the same version on both sides.

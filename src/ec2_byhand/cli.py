@@ -39,6 +39,7 @@ import contextlib
 import io
 import os
 import re
+import shlex
 import signal
 import sys
 import threading
@@ -81,10 +82,16 @@ MUCH_TO_READ = 1 << 30  # from here on, the plan says how to leave data out
 
 
 class UsageError(Exception):
-    """Wrong input or arguments; printed as one line, exit code 2.
+    """Wrong input or arguments; printed as one line, exit code 2. `command`, when
+    given, is a command to run next, printed after it on a line of its own.
 
-    入力や引数の誤り。1 行で表示して終了コード 2。
+    入力や引数の誤り。1 行で表示して終了コード 2。`command` があれば、次に実行する
+    コマンドで、そのあとに 1 行で表示する。
     """
+
+    def __init__(self, message: str, command: str = "") -> None:
+        super().__init__(message)
+        self.command = command
 
 
 def parse_size(text: str) -> int:
@@ -467,8 +474,21 @@ class _Aws:
         each = ", ".join(f"{snapshot} {done}".strip() for snapshot, done in progress.items())
         _progress(self._args, msg("snapshots_progress", progress=each))
 
-    def open(self, disks: list[Disk], label: str, verify: bool) -> Snapshot:
-        """Open EBS snapshots as one side of the comparison."""
+    def _copy_image_command(self, image_id: str) -> str:
+        """The AWS CLI command that copies `image_id` into this account, for the same
+        region and profile as this run."""
+        region = self.clients[0].meta.region_name
+        profile = f" --profile {shlex.quote(self._args.profile)}" if self._args.profile else ""
+        return (
+            f"aws ec2 copy-image{profile} --region {region} --source-region {region} "
+            f"--source-image-id {image_id} --name ec2-byhand-baseline"
+        )
+
+    def open(
+        self, disks: list[Disk], label: str, verify: bool, image_id: str | None = None
+    ) -> Snapshot:
+        """Open EBS snapshots as one side of the comparison. `image_id` is the AMI they
+        are of, when they came from one: an error can then say how to copy it."""
         from botocore.exceptions import ClientError
 
         from ec2_byhand.aws.ebs import EbsSnapshotDevice
@@ -498,6 +518,12 @@ class _Aws:
                     "ResourceNotFoundException",
                 ):
                     raise
+                next_step = command = ""
+                if label == "baseline" and public and image_id:
+                    next_step = msg("blocks_copy_ami")
+                    command = self._copy_image_command(image_id)
+                elif label == "baseline":
+                    next_step = msg("blocks_next_step")
                 raise AwsSourceError(
                     msg(
                         "cannot_read_blocks",
@@ -505,8 +531,9 @@ class _Aws:
                         snapshot=d.snapshot_id,
                         code=code,
                         reason=msg("blocks_public" if public else "blocks_denied"),
-                        next_step=msg("blocks_next_step") if label == "baseline" else "",
-                    )
+                        next_step=next_step,
+                    ),
+                    command,
                 ) from err
             self.devices.append(dev)
             devices[d.device] = dev
@@ -589,7 +616,7 @@ def _baseline_side(
             [Disk(f"disk{i}", s) for i, s in enumerate(args.baseline_snapshot)], "baseline", verify
         )
     if image_id:
-        baseline = aws.open(image_disks(aws.clients[0], image_id), "baseline", verify)
+        baseline = aws.open(image_disks(aws.clients[0], image_id), "baseline", verify, image_id)
         baseline.label = f"{image_id} {baseline.label}"
         return baseline
     return None
@@ -685,7 +712,7 @@ def run(args: argparse.Namespace) -> int:
         try:
             current, baseline = _sides(args, aws, stack)
         except AwsSourceError as err:
-            raise UsageError(str(err)) from err
+            raise UsageError(str(err), err.command) from err
         if aws.devices:
             _progress(args, msg("analyzing"))
 
@@ -900,6 +927,10 @@ def main(argv: list[str] | None = None) -> int:
             return 130
         except UsageError as err:
             _say(msg("error", error=printable(str(err))))
+            if err.command:
+                # Without the program's name in front: the line is there to be copied.
+                with contextlib.suppress(OSError, ValueError):
+                    print(f"    {printable(err.command)}", file=sys.stderr, flush=True)
             return 2
         except DiskReadError as err:
             _say(msg("cannot_read_disks", error=printable(str(err))))
