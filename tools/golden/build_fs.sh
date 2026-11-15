@@ -11,6 +11,10 @@
 # Needs: e2fsprogs, xfsprogs, acl, and Docker for the docker:* cases.
 set -euo pipefail
 
+# mkfs.xfs 5.19 and later refuses a filesystem under 300 MB. These three together lift
+# that (an fstests escape hatch, as in docker_mkfs.sh) so the golden images stay small.
+export TEST_DIR=1 TEST_DEV=1 QA_CHECK_FS=1
+
 out=$(realpath -m "${1:?usage: build_fs.sh OUTDIR [CASE...]}")
 shift
 here=$(cd "$(dirname "$0")" && pwd)
