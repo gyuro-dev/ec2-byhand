@@ -613,14 +613,14 @@ def label(key: str, /) -> str:
 
 def row(key: str, value: str, /) -> str:
     """One row of the summary: the label `key`, a colon, and `value` from the column
-    where every row's value starts (the longest label of the language, its colon and
-    nothing more). Further lines of `value` start in that column too.
+    where every row's value starts (after the longest label of the language, its colon
+    and a space). Further lines of `value` start in that column too.
 
     まとめの 1 行: 見出し `key`、コロン、そして全行で同じ桁から始まる `value`。その桁は、その
-    言語でいちばん長い見出しとコロンのすぐ後ろ。`value` の 2 行目以降も同じ桁から始める。
+    言語でいちばん長い見出しとコロンと空白 1 つの後ろ。`value` の 2 行目以降も同じ桁から始める。
     """
     labels = LABELS[_lang]
-    column = max(width(label) for label in labels.values()) + 1
+    column = max(width(label) for label in labels.values()) + 2
     head = labels[key] + ":"
     indent = " " * column
     return head + " " * (column - width(head)) + value.replace("\n", "\n" + indent)

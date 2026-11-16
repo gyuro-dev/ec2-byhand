@@ -764,7 +764,7 @@ def test_summary_marks_a_partly_damaged_db(tmp_path, monkeypatch, capsys) -> Non
     _fake_sides(monkeypatch, fs)
     assert cli.main(["--current-image", "unused", "-o", str(tmp_path / "o")]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert "packages:              1 installed (some entries unreadable)" in lines
+    assert "packages:               1 installed (some entries unreadable)" in lines
     assert next(x for x in lines if x.startswith("hand-placed:")).endswith(
         "(may include package files)"
     )
@@ -786,7 +786,7 @@ def test_summary_shows_what_a_damaged_current_db_makes_unknown(
     assert cli.main(["--current-image", "unused", "-o", str(tmp_path / "o")]) == 0
     out = capsys.readouterr().out
     assert "modified package files: unknown" in out
-    assert "packages:              unknown" in out
+    assert "packages:               unknown" in out
     assert "(may include package files)" in out.split("deleted:")[0]
     assert "warning: package-db-unreadable (current): dpkg status: damaged" in out
     manifest = json.loads((tmp_path / "o" / "manifest.json").read_text("utf-8"))
@@ -801,7 +801,7 @@ def test_summary_shows_what_a_damaged_baseline_db_makes_unknown(
     _fake_sides(monkeypatch, cur, base)
     assert cli.main(["--current-image", "unused", "-o", str(tmp_path / "o")]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert "packages:              1 installed (changes since baseline unknown)" in lines
+    assert "packages:               1 installed (changes since baseline unknown)" in lines
     assert next(x for x in lines if x.startswith("deleted:")).endswith(
         "(may include package files)"
     )

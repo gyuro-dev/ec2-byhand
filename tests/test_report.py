@@ -66,10 +66,10 @@ def _manifest(tmp_path: Path) -> dict:
 
 def test_every_item_of_the_manifest_has_its_line(tmp_path: Path) -> None:
     m = _manifest(tmp_path)
-    lines = report.report_lines(m, ["hand-placed:           7"])
+    lines = report.report_lines(m, ["hand-placed:            7"])
     assert lines[0].startswith("ec2-byhand ")
-    assert lines[2] == "current:               test"
-    assert lines[3] == "hand-placed:           7"  # the summary, as the run printed it
+    assert lines[2] == "current:                test"
+    assert lines[3] == "hand-placed:            7"  # the summary, as the run printed it
     sections = _sections(lines)
     hand = sections["hand-placed"]
     assert len(hand) == len(m["hand_placed"]) == m["summary"]["hand_placed"]
@@ -98,8 +98,8 @@ def test_nothing_found_is_a_report_of_the_summary_alone() -> None:
     fs = MemFs()
     m = analyze(_snap(fs), _snap(fs))
     assert m["summary"]["hand_placed"] == 0
-    lines = report.report_lines(m, ["hand-placed:           0"])
-    assert lines[2:] == ["current:               test", "hand-placed:           0"]
+    lines = report.report_lines(m, ["hand-placed:            0"])
+    assert lines[2:] == ["current:                test", "hand-placed:            0"]
 
 
 def test_headings_and_notes_follow_the_language_the_items_do_not(tmp_path: Path) -> None:
@@ -122,7 +122,7 @@ def test_the_command_writes_the_report_beside_the_manifest(tmp_path: Path, capsy
     assert cli.main(args) == 0
     printed = capsys.readouterr().out.splitlines()
     written = (out / "report.txt").read_text(encoding="utf-8").splitlines()
-    assert f"report:                {out / 'report.txt'}" in printed
+    assert f"report:                 {out / 'report.txt'}" in printed
     assert written[3 : 3 + len(printed)] == printed  # the same summary, then the lists
     m = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     sections = _sections(written)

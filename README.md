@@ -79,20 +79,20 @@ packages (3)
 On the screen, a summary of the numbers (an example):
 
 ```text
-manifest:              out/manifest.json
-report:                out/report.txt
-baseline:              ami-0123456789abcdef0 /dev/xvda=snap-0aaaa1111bbbb2222c
-changed between:       2026-10-24 13:10 and 2026-10-24 13:11 UTC (last change of each)
-hand-placed:           17
-modified package files:   10 (6 since baseline)
-deleted:               1
-packages:              110 installed, +3 -0 ^0 v0
-language packages:     5
-services:              1
-noise:                 628
-after.tar.gz:          22 entries
-before.tar.gz:         8 entries
-patches:               2
+manifest:               out/manifest.json
+report:                 out/report.txt
+baseline:               ami-0123456789abcdef0 /dev/xvda=snap-0aaaa1111bbbb2222c
+changed between:        2026-10-24 13:10 and 2026-10-24 13:11 UTC (last change of each)
+hand-placed:            17
+modified package files: 10 (6 since baseline)
+deleted:                1
+packages:               110 installed, +3 -0 ^0 v0
+language packages:      5
+services:               1
+noise:                  628
+after.tar.gz:           22 entries
+before.tar.gz:          8 entries
+patches:                2
 ```
 
 | Line | Meaning |

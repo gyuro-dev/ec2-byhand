@@ -130,7 +130,10 @@ def snapshot_volumes(ec2: Any, snapshot_ids: list[str]) -> dict[str, str]:
     }
 
 
-POLL_SECONDS = 15  # how often the snapshots waited for are looked at
+# How often the snapshots waited for are looked at. Every 15 seconds left the reads
+# waiting 7.5 s on average after the snapshots were done (on AWS, even a snapshot with
+# few changed blocks took 60 to 90 s); DescribeSnapshots costs nothing.
+POLL_SECONDS = 5
 
 
 def wait_for_snapshots(

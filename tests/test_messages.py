@@ -130,10 +130,11 @@ def test_rows_start_their_values_in_one_column() -> None:
         with language(lang):
             starts = {width(row(key, "x")) - 1 for key in LABELS[lang]}
             assert len(starts) == 1, lang
-    # English: where the summary has always had them.
-    assert row("noise", "628") == "noise:                 628"
-    assert row("modified_package_files", "   10") == "modified package files:   10"
-    assert row("baseline", "none\n(more)") == "baseline:              none\n" + " " * 23 + "(more)"
+    # English: the longest label, its colon and a space (until 0.1.1 the longest row
+    # padded its own value, and its number stood three columns off the others).
+    assert row("noise", "628") == "noise:                  628"
+    assert row("modified_package_files", "10") == "modified package files: 10"
+    assert row("baseline", "none\n(more)") == "baseline:               none\n" + " " * 24 + "(more)"
 
 
 def test_wrap_breaks_japanese_by_what_a_terminal_shows() -> None:
@@ -212,13 +213,13 @@ def test_summary_in_japanese_and_manifest_in_english(tmp_path, monkeypatch, caps
     assert "ec2-byhand: どのパッケージにも属さない" in captured.err
     summary = captured.out.splitlines()
     rows = [line for line in summary if not line.startswith("警告: ")]
-    column = width("変更されたパッケージファイル:")
+    column = width("変更されたパッケージファイル: ")
     for line in rows:
         head = line[: line.index(":") + 1] if not line.startswith(" ") else ""
         assert width(head) <= column, line
         assert line[len(head) :].startswith(" " * (column - width(head))), line
     assert "手動で配置されたファイル:" in captured.out
-    assert "baseline:                    なし: AMI に元からあるファイルも" in captured.out
+    assert "baseline:                     なし: AMI に元からあるファイルも" in captured.out
     assert (
         " " * column + "（古いバックアップを指定する: --baseline-snapshot, --baseline-ami）" in rows
     )
