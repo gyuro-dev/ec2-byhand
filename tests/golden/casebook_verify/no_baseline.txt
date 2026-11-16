@@ -2,21 +2,21 @@
 # command: ec2-byhand --current-image '{casebook_dir}/golden/out/verify-al2023.img' --no-archives -o out
 # exit_code: 0
 ----- stdout -----
-manifest:              out/manifest.json
-report:                out/report.txt
-baseline:              none: the AMI's own files are listed with the hand work, and
-                       what was deleted, earlier versions and patches cannot be shown
-                       (give an early backup: --baseline-snapshot, --baseline-ami)
-changed between:       DATE and DATE UTC (last change of each)
-hand-placed:           290 (the AMI's own files too)
-modified package files:    8 (changed; which lines, and whether by the AMI or by hand: unknown)
-deleted:               unknown (no baseline)
-packages:              110 installed
-language packages:     5
-package scripts:       0 files
-alternatives:          2
-services:              2
-noise:                 N
+manifest:               out/manifest.json
+report:                 out/report.txt
+baseline:               none: the AMI's own files are listed with the hand work, and
+                        what was deleted, earlier versions and patches cannot be shown
+                        (give an early backup: --baseline-snapshot, --baseline-ami)
+changed between:        DATE and DATE UTC (last change of each)
+hand-placed:            290 (the AMI's own files too)
+modified package files: 8 (changed; which lines, and whether by the AMI or by hand: unknown)
+deleted:                unknown (no baseline)
+packages:               110 installed
+language packages:      5
+package scripts:        0 files
+alternatives:           2
+services:               2
+noise:                  N
 warning: no-baseline: no baseline snapshot: results include files the AMI itself provided, not only changes made since
 warning: unresolved-mount (current / LABEL=/): device not found among the scanned volumes
 ----- stderr -----

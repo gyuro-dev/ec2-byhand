@@ -80,20 +80,20 @@ Python 3.12 以上が必要。認証情報とリージョンは AWS CLI と同�
 画面には、件数のまとめが出る（例）。
 
 ```text
-manifest:                    out/manifest.json
-レポート:                    out/report.txt
-baseline:                    ami-0123456789abcdef0 /dev/xvda=snap-0aaaa1111bbbb2222c
-変更の期間:                  2026-10-24 13:10 から 2026-10-24 13:11 UTC（各項目の最終変更）
-手動で配置されたファイル:    17
-変更されたパッケージファイル:   10（baseline 以降は 6）
-削除されたファイル:          1
-パッケージ:                  インストール済み 110, +3 -0 ^0 v0
-言語パッケージ:              5
-サービス:                    1
-ノイズ:                      628
-after.tar.gz:                22 エントリ
-before.tar.gz:               8 エントリ
-パッチ:                      2
+manifest:                     out/manifest.json
+レポート:                     out/report.txt
+baseline:                     ami-0123456789abcdef0 /dev/xvda=snap-0aaaa1111bbbb2222c
+変更の期間:                   2026-10-24 13:10 から 2026-10-24 13:11 UTC（各項目の最終変更）
+手動で配置されたファイル:     17
+変更されたパッケージファイル: 10（baseline 以降は 6）
+削除されたファイル:           1
+パッケージ:                   インストール済み 110, +3 -0 ^0 v0
+言語パッケージ:               5
+サービス:                     1
+ノイズ:                       628
+after.tar.gz:                 22 エントリ
+before.tar.gz:                8 エントリ
+パッチ:                       2
 ```
 
 | 行 | 意味 |

@@ -128,7 +128,7 @@ def test_the_command_uploads_its_outputs(
     listed = s3.list_objects_v2(Bucket=BUCKET, Prefix="runs/")["Contents"]
     names = {o["Key"].split("/", 3)[3] for o in listed}
     assert {"manifest.json", "report.txt", "after.tar.gz"} <= names
-    assert "uploaded:              s3://" in capsys.readouterr().out
+    assert "uploaded:               s3://" in capsys.readouterr().out
 
 
 def test_kms_key_id_needs_upload(tmp_path: Path) -> None:

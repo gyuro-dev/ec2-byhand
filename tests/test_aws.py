@@ -489,7 +489,8 @@ def test_analyze_instance_matches_image_files(ec2, monkeypatch, tmp_path: Path) 
     )  # made by the run, so removed
     fake = FakeEbs({"snap-now": CURRENT, "snap-ami": BASELINE})
     monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, fake))
-    monkeypatch.setattr(botocore.waiter.time, "sleep", lambda s: None)  # the waiter's 15 s delay
+    # The pause between looks at the snapshot (the time module is botocore's and ours).
+    monkeypatch.setattr(botocore.waiter.time, "sleep", lambda s: None)
 
     out_aws, out_files = tmp_path / "aws", tmp_path / "files"
     assert cli.main(["--instance-id", "i-0abc", "-o", str(out_aws), "-q"]) == 0

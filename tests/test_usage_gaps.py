@@ -581,7 +581,7 @@ def test_kept_snapshots_are_named_even_when_quiet(tmp_path: Path, monkeypatch, c
 
 
 def test_the_wait_for_snapshots_has_no_limit_and_says_how_far_they_are(monkeypatch) -> None:
-    states = [("pending", "0%")] * 500 + [("pending", "99%"), ("completed", "100%")]
+    states = [("pending", "0%")] * 1500 + [("pending", "99%"), ("completed", "100%")]
     looks: list[dict[str, str]] = []
     slept: list[float] = []
 
@@ -592,8 +592,10 @@ def test_the_wait_for_snapshots_has_no_limit_and_says_how_far_they_are(monkeypat
     monkeypatch.setattr(snapshots.time, "sleep", slept.append)
     ec2 = SimpleNamespace(describe_snapshots=describe_snapshots)
     snapshots.wait_for_snapshots(ec2, [Disk("/dev/xvda", "snap-1")], looks.append)
-    assert len(slept) == 501  # over two hours of looks, 15 seconds apart
+    assert len(slept) == 1501  # over two hours of looks
     assert looks[-1] == {"snap-1": "99%"}
+    # Often enough that the reads start soon after the snapshots are done.
+    assert set(slept) == {5}
 
     def failed(SnapshotIds: list[str]) -> dict:  # noqa: N803
         return {"Snapshots": [{"SnapshotId": "snap-1", "State": "error", "StateMessage": "x"}]}
@@ -1285,7 +1287,7 @@ def test_summary_mentions_files_to_review_only_when_there_are_some(
     monkeypatch.setattr(cli, "_sides", lambda args, aws, stack: (_snap(fs), None))
     args = ["--current-image", "unused", "-o", str(tmp_path / "o"), "--no-archives"]
     assert cli.main(args) == 0
-    assert "to review:             3 package files" in capsys.readouterr().out
+    assert "to review:              3 package files" in capsys.readouterr().out
     monkeypatch.setattr(cli, "_sides", lambda args, aws, stack: (_snap(MemFs()), None))
     assert cli.main([*args, "--force"]) == 0
     assert "to review" not in capsys.readouterr().out
@@ -1796,7 +1798,7 @@ def test_a_file_over_one_gib_is_not_read_unless_the_limit_is_lifted(
     assert m["summary"]["files_over_max_file_size"] == 1
     assert fs.ino("/var/lib/mysql/ibdata1") not in fs.opened
     out = capsys.readouterr()
-    assert "not read:              1 files over 1 GiB (--max-file-size none reads them)" in out.out
+    assert "not read:               1 files over 1 GiB (--max-file-size none reads them)" in out.out
     assert "will read up to 1 byte in 1 files that no package owns; 1 over 1 GiB left unread" in (
         out.err
     )
@@ -1833,7 +1835,7 @@ def test_summary_says_how_many_of_the_unread_files_are_package_files(
     fs.add_file("/opt/dump.sql", bytes(2000))
     _run_cli(monkeypatch, fs, tmp_path / "o", "--max-file-size", "1K")
     out = capsys.readouterr().out
-    assert "not read:              2 files over 1 KiB, 1 of them package files (" in out
+    assert "not read:               2 files over 1 KiB, 1 of them package files (" in out
 
 
 def test_a_run_says_how_much_there_is_to_read_before_reading_it() -> None:

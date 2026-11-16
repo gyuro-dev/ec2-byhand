@@ -2,23 +2,23 @@
 # command: ec2-byhand --current-image '{casebook_dir}/golden/out/verify-al2023.img' --baseline-image '{casebook_dir}/golden/out/verify-al2023-before.img' -o out
 # exit_code: 0
 ----- stdout -----
-manifest:              out/manifest.json
-report:                out/report.txt
-baseline:              {casebook_dir}/golden/out/verify-al2023-before.img
-changed between:       DATE and DATE UTC (last change of each)
-hand-placed:           17
-modified package files:   10 (6 since baseline)
-deleted:               1
-packages:              110 installed, +3 -0 ^0 v0
-language packages:     5
-package scripts:       0 files
-alternatives:          1
-services:              1
-noise:                 N
-after.tar.gz:          22 entries
-before.tar.gz:         8 entries
-patches:               2
-skipped:               1 (see manifest archives.skipped)
+manifest:               out/manifest.json
+report:                 out/report.txt
+baseline:               {casebook_dir}/golden/out/verify-al2023-before.img
+changed between:        DATE and DATE UTC (last change of each)
+hand-placed:            17
+modified package files: 10 (6 since baseline)
+deleted:                1
+packages:               110 installed, +3 -0 ^0 v0
+language packages:      5
+package scripts:        0 files
+alternatives:           1
+services:               1
+noise:                  N
+after.tar.gz:           22 entries
+before.tar.gz:          8 entries
+patches:                2
+skipped:                1 (see manifest archives.skipped)
 warning: unresolved-mount (current / LABEL=/): device not found among the scanned volumes
 warning: unresolved-mount (baseline / LABEL=/): device not found among the scanned volumes
 ----- stderr -----

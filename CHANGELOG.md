@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `--instance-id` looks at the snapshots it waits for every 5 seconds, not 15: the
+  reads start 2.5 seconds after the snapshots are done on average, not 7.5.
+
+### Fixed
+
+- The summary on the screen: the number of modified package files stood three columns
+  off the other rows' numbers. Every value now starts one space after the longest label.
+
 ## [0.1.1] - 2026-11-15
 
 ### Changed

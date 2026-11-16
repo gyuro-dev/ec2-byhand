@@ -261,11 +261,10 @@ def _summary_lines(m: dict[str, Any], outdir: Path) -> list[str]:
     )
     incomplete_db = unreadable_db | damaged_db
     with_package_files = msg("may_include_package_files")
-    # The longest label leaves no room before its value, which brings its own.
     if s["modified_package_files"] is None:
-        modified = " " + msg("unknown")
+        modified = msg("unknown")
     else:
-        modified = f"{s['modified_package_files']:>5}"
+        modified = str(s["modified_package_files"])
     no_baseline = m["baseline"] is None
     if s["modified_package_files_since_baseline"] is not None:
         modified += msg("since_baseline", count=s["modified_package_files_since_baseline"])
