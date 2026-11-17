@@ -43,7 +43,6 @@ from diskread.fs import Filesystem, FileType, Stat, file_type
 from diskread.source import SystemSource
 from diskread.system import System
 from ec2_byhand import __version__
-from ec2_byhand.archive import SKIP_XATTRS
 from ec2_byhand.cloudinit import CloudInit, read_cloud_init
 from ec2_byhand.containers import Containers, compare_containers, read_containers
 from ec2_byhand.langpkgs import (
@@ -57,11 +56,13 @@ from ec2_byhand.packages import PackageDB, diff_packages, read_packages
 from ec2_byhand.packages.history import Transaction, ZoneChange, read_history, zone_from
 from ec2_byhand.packages.model import Package
 from ec2_byhand.packages.verify import (
+    SELINUX_LABEL,
     FileProblem,
     ReadLimits,
     owned_paths,
     physical_path,
     verify_packages,
+    xattr_settings,
 )
 from ec2_byhand.presets import Presets, preset_links
 from ec2_byhand.secrets import SCAN_MAX_BYTES, Finding, described, find_secrets
@@ -76,7 +77,6 @@ from ec2_byhand.servicedirs import service_dirs
 from ec2_byhand.snaps import Snap, compare_snaps, read_snaps, snap_paths, unit_owners, unit_snap
 
 SCHEMA = "ec2-byhand/manifest/v1"
-SELINUX_LABEL = "security.selinux"
 SYSTEMD_DIR = "/etc/systemd/system"
 # Noise counted by the analysis itself rather than by a path rule (see NoiseFilter).
 COMPUTED_NOISE = {
@@ -322,24 +322,13 @@ def _describe(e: _Entry, hasher: _Hasher, sensitive: Sensitive) -> dict[str, Any
     if sensitive.match(e.path):
         d["sensitive"] = True
     try:
-        names = sorted(_settings(e.fs.xattrs(e.ino)))
+        names = sorted(xattr_settings(e.fs.xattrs(e.ino)))
     except DiskReadError as err:
         names = []
         d.setdefault("error", str(err))
     if names:  # setcap, setfacl, setfattr: the archive carries the values
         d["xattrs"] = names
     return d
-
-
-def _settings(attrs: dict[str, bytes]) -> dict[str, bytes]:
-    """Of a path's extended attributes, those that are settings someone made: ACLs,
-    capabilities, user.* and the like. Not the SELinux label, which every file has
-    (compared on its own, see _signature); not XFS's raw copies of the ACLs."""
-    return {
-        name: value
-        for name, value in attrs.items()
-        if name != SELINUX_LABEL and name not in SKIP_XATTRS
-    }
 
 
 def _selinux(attrs: dict[str, bytes]) -> str | None:
@@ -352,7 +341,7 @@ def _signature(fs: Filesystem, ino: int, st: Stat) -> dict[str, Any]:
     """What counts as "changed" between snapshots, content aside (see _content_changes)."""
     sig = {"type": str(st.type), "mode": _stat.S_IMODE(st.mode), "uid": st.uid, "gid": st.gid}
     attrs = fs.xattrs(ino)
-    sig["xattrs"] = _settings(attrs)
+    sig["xattrs"] = xattr_settings(attrs)
     sig["selinux"] = _selinux(attrs)  # a `chcon`: what a service may read hangs on it
     if st.type is FileType.REG:
         sig["size"] = st.size

@@ -210,6 +210,47 @@ def test_dpkg_changes_only_the_baseline_can_show() -> None:
     assert all(i["since_baseline"] for i in item.values())
 
 
+CAP_NET_BIND_SERVICE = b"\x01\x00\x00\x02\x00\x04\x00\x00" + bytes(12)  # cap_net_bind_service=ep
+CAP_NET_RAW = b"\x01\x00\x00\x02\x00\x20\x00\x00" + bytes(12)  # cap_net_raw=ep
+
+
+@pytest.mark.parametrize("version_now", ["1.0", "1.1"])
+def test_setcap_and_setfacl_on_package_files_are_shown(version_now: str) -> None:
+    # `setcap cap_net_bind_service=+ep /usr/bin/node`, so that it may listen on port 80:
+    # common hand work, and nothing that the package database records.
+    listed: dict[str, bytes | None] = {
+        "/usr/bin/node": b"node",
+        "/usr/bin/ping": b"ping",
+        "/var/www": None,
+        "/usr/bin/plain": b"plain",
+    }
+    before, after = MemFs(), MemFs()
+    _dpkg_db(before, {"app": ("1.0", listed)})
+    _dpkg_db(after, {"app": (version_now, listed)})
+    for fs in (before, after):
+        fs.add_file("/usr/bin/node", b"node")
+        fs.add_file("/usr/bin/ping", b"ping")
+        fs.add_dir("/var/www")
+        fs.add_file("/usr/bin/plain", b"plain")
+        # What the package's own script set (iputils-ping on Debian): on both sides.
+        fs.set_xattr("/usr/bin/ping", "security.capability", CAP_NET_RAW)
+    after.set_xattr("/usr/bin/node", "security.capability", CAP_NET_BIND_SERVICE)
+    after.set_xattr("/var/www", "system.posix_acl_access", b"\x02\x00\x00\x00")
+    # A relabel is not hand work on a package file: the label is left out, and so is the
+    # digest a recursive restorecon leaves (cloud-init's on /etc/ssh, seen on AL2023).
+    after.set_xattr("/usr/bin/plain", "security.selinux", b"system_u:object_r:bin_t:s0\0")
+    after.set_xattr("/var/www", "security.sehash", bytes(32))
+    item = _items(analyze(_snap(after), _snap(before)), "modified_package_files")
+    if version_now != "1.0":
+        # Upgraded since: its scripts may have set them again, so it is not compared.
+        assert item == {}
+        return
+    assert set(item) == {"/usr/bin/node", "/var/www"}
+    assert item["/usr/bin/node"]["problems"] == ["xattrs"]
+    assert item["/var/www"]["problems"] == ["xattrs"]
+    assert all(i["since_baseline"] for i in item.values())
+
+
 def test_a_file_the_ami_already_changed_is_compared_with_the_ami() -> None:
     # Seen on AL2023: the AMI ships an sshd_config that differs from its package, so
     # "content" is a problem on both sides, and a line appended by hand hid behind it.

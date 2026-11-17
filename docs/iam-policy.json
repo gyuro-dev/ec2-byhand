@@ -18,17 +18,30 @@
       ]
     },
     {
-      "Sid": "TagOnlyWhatItSnapshots",
+      "Sid": "CopyAPublicAmi",
+      "Effect": "Allow",
+      "Action": "ec2:CopyImage",
+      "Resource": ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*::snapshot/*"]
+    },
+    {
+      "Sid": "TagOnlyWhatItMakes",
       "Effect": "Allow",
       "Action": "ec2:CreateTags",
-      "Resource": "arn:aws:ec2:*::snapshot/*",
-      "Condition": {"StringEquals": {"ec2:CreateAction": "CreateSnapshots"}}
+      "Resource": ["arn:aws:ec2:*::snapshot/*", "arn:aws:ec2:*::image/*"],
+      "Condition": {"StringEquals": {"ec2:CreateAction": ["CreateSnapshots", "CopyImage"]}}
     },
     {
       "Sid": "DeleteOnlyItsOwnSnapshots",
       "Effect": "Allow",
       "Action": "ec2:DeleteSnapshot",
       "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Condition": {"Null": {"aws:ResourceTag/ec2-byhand": "false"}}
+    },
+    {
+      "Sid": "DeregisterOnlyItsOwnCopies",
+      "Effect": "Allow",
+      "Action": "ec2:DeregisterImage",
+      "Resource": "arn:aws:ec2:*::image/*",
       "Condition": {"Null": {"aws:ResourceTag/ec2-byhand": "false"}}
     },
     {

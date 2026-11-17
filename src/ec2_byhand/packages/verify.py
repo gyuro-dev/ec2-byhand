@@ -35,6 +35,10 @@ version as in the baseline is compared with the baseline's copy instead: "mode",
 *-since-baseline problems above. A package upgraded since may change them on its
 own, so it is not compared. Without a baseline such changes stay invisible.
 
+Neither records extended attributes. For a package at the same version in the
+baseline, rpm or dpkg, a file's attributes (capabilities, ACLs, user.*; the SELinux
+label aside) are compared with the baseline's copy: "xattrs" (a `setcap` by hand).
+
 File contents are read as little as possible, since over the EBS direct APIs
 every read is billed: a size that differs needs no read, ReadLimits keeps noise
 and files over --max-file-size unread, each file is read once, and all are read
@@ -52,7 +56,10 @@ baseline があれば、rpm が内容を見ないファイル（%ghost や %veri
 content-since-baseline、baseline に無ければ created-since-baseline。dpkg は権限・所有者・リン
 ク先を記録しないので dpkg --verify では見えない。baseline のパッケージ DB があれば、baseline と
 同じ版のパッケージのファイルは baseline の実物と比べる（アップグレードで変わるものは比べない）。
-baseline が無ければ、これらの変更は見えない。ファイルの中身はできるだけ読まない（EBS direct
+baseline が無ければ、これらの変更は見えない。拡張属性はどちらも記録しないので、rpm でも dpkg
+でも、baseline と同じ版のパッケージのファイルは拡張属性（ケーパビリティ・ACL・user.* など。
+SELinux のラベルは除く）を baseline の実物と比べる（xattrs。手での setcap など）。ファイルの中
+身はできるだけ読まない（EBS direct
 APIs 越しでは読むたびに課金される）: サイズが違えば読まず、ReadLimits でノイズと
 --max-file-size を超えるファイルを読まず、同じファイルは 1 回だけ、inode 順に読んでブロックキャッ
 シュを無駄にしない。読む範囲は前もってディスクに告げ、先読みできるようにする。unowned_paths
@@ -72,7 +79,31 @@ from diskread.blockdev import BlockDevice, read_chunks, will_read
 from diskread.errors import DiskReadError
 from diskread.fs import Filesystem, FileType, Stat
 from diskread.source import SystemSource
+from ec2_byhand.archive import SKIP_XATTRS
 from ec2_byhand.packages.model import PackageDB, PackageFile
+
+SELINUX_LABEL = "security.selinux"
+# SELinux's own: the label, and the digest a recursive restorecon leaves on a directory
+# to skip it next time (cloud-init does one on /etc/ssh at first boot, seen on AL2023).
+SELINUX_XATTRS = frozenset({SELINUX_LABEL, "security.sehash"})
+
+
+def xattr_settings(attrs: dict[str, bytes]) -> dict[str, bytes]:
+    """Of a path's extended attributes, those that are settings someone made: ACLs,
+    capabilities (setcap), user.* and the like. Not SELinux's own (the label every file
+    has and a policy update relabels, the digest restorecon leaves); not XFS's raw
+    copies of the ACLs.
+
+    パスの拡張属性のうち、誰かが設定したもの: ACL・ケーパビリティ（setcap）・user.* など。
+    SELinux 自身のもの（どのファイルにもあってポリシーの更新で付け直されるラベル、restorecon
+    が残すハッシュ）と、XFS の ACL の生のコピーは除く。
+    """
+    return {
+        name: value
+        for name, value in attrs.items()
+        if name not in SELINUX_XATTRS and name not in SKIP_XATTRS
+    }
+
 
 # rpmvf_e
 VERIFY_DIGEST, VERIFY_SIZE, VERIFY_LINKTO, VERIFY_USER, VERIFY_GROUP = 1, 2, 4, 8, 16
@@ -94,7 +125,7 @@ class FileProblem:
     path: str
     package: str
     arch: str | None
-    # "missing", "content", "size", "mode", "link", "user", "group", "unreadable",
+    # "missing", "content", "size", "mode", "link", "user", "group", "xattrs", "unreadable",
     # "content-since-baseline", "created-since-baseline" (see the module docstring)
     problems: frozenset[str]
     is_config: bool
@@ -381,6 +412,25 @@ def _dpkg_since_baseline(
     return problems
 
 
+def _xattrs_since_baseline(src: SystemSource, f: PackageFile, baseline: SystemSource) -> set[str]:
+    """A `setcap`, `setfacl` or `setfattr` on a package file: its extended attributes
+    (the SELinux label aside) compared with the baseline's copy. Neither rpm nor dpkg
+    can tell: dpkg records none, and some packages' scripts set them (iputils' ping on
+    Debian gets cap_net_raw), which an upgrade does again; so only for a package at the
+    same version in the baseline."""
+    if f.path in ("/", "/."):
+        return set()
+    found = src.resolve(f.path, follow_last=False)
+    before = baseline.resolve(f.path, follow_last=False)
+    if found is None or before is None:
+        return set()  # missing, or new since: said otherwise
+    fs, ino = found
+    bfs, bino = before
+    if xattr_settings(fs.xattrs(ino)) != xattr_settings(bfs.xattrs(bino)):
+        return {"xattrs"}
+    return set()
+
+
 def verify_packages(
     src: SystemSource,
     db: PackageDB,
@@ -413,6 +463,7 @@ def verify_packages(
 
     def check_every_file() -> list[FileProblem]:
         compared: set[str] = set()  # a directory is listed by many packages: report it once
+        attrs_compared: set[str] = set()
         out = []
         for pkg in db.packages:
             against_baseline = (pkg.name, pkg.arch, pkg.evr) in same_version
@@ -430,6 +481,9 @@ def verify_packages(
                         if baseline is not None and against_baseline and f.path not in compared:
                             compared.add(f.path)
                             problems |= _dpkg_since_baseline(src, f, baseline, reader)
+                    if baseline is not None and against_baseline and f.path not in attrs_compared:
+                        attrs_compared.add(f.path)
+                        problems |= _xattrs_since_baseline(src, f, baseline)
                 except DiskReadError as err:  # damaged metadata: cannot tell, so say so
                     problems, error = {"unreadable"}, str(err)
                 if problems:

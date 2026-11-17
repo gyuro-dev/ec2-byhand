@@ -4,15 +4,17 @@ current  CreateSnapshots on the instance: one crash-consistent snapshot
          per attached EBS volume, taken at the same moment (what LVM
          across volumes needs). Instance store volumes are not included.
 baseline the AMI the instance was launched from: the snapshot of each EBS
-         mapping in the image's block device mappings.
+         mapping in the image's block device mappings. A public AMI's are
+         not readable, so it is copied into the account first (copy_image).
 
 Snapshots made here are tagged ec2-byhand=<instance id> so they can be found
 and are deleted after the analysis unless kept (delete_snapshots).
 
 どの EBS スナップショットを比べるか: 今のインスタンスのディスクと、その AMI のもの。current は
 CreateSnapshots で全 EBS ボリュームを同時に取る（クラッシュ整合。ボリュームをまたぐ LVM に必要
-）。baseline は起動元 AMI のブロックデバイスマッピングのスナップショット。ここで作ったスナップ
-ショットには ec2-byhand=<instance id> のタグを付け、残す指定がなければ解析後に消す。
+）。baseline は起動元 AMI のブロックデバイスマッピングのスナップショット。公開 AMI のものは読め
+ないので、先にこのアカウントにコピーする（copy_image）。ここで作ったスナップショットには
+ec2-byhand=<instance id> のタグを付け、残す指定がなければ解析後に消す。
 """
 
 from __future__ import annotations
@@ -186,6 +188,119 @@ def image_disks(ec2: Any, image_id: str) -> list[Disk]:
     if not disks:
         raise AwsSourceError(msg("ami_no_snapshots", image=image_id))
     return sorted(disks, key=lambda d: d.device)
+
+
+def copy_image(ec2: Any, image_id: str) -> str:
+    """Start copying the AMI `image_id` into this account, in the same region, and
+    return the copy's id (not waited for: the caller records it first, so that it is
+    deleted whatever happens). The EBS direct APIs do not read the snapshots behind a
+    public AMI; they do read the copy's. The copy and its snapshots are tagged
+    ec2-byhand=<image_id>, so that the IAM policy can let a run delete only those.
+
+    AMI `image_id` を同じリージョンでこのアカウントにコピーし始め、コピーの ID を返す（完了は
+    待たない: 何があっても消せるよう、呼び出し側が先に記録する）。公開 AMI の裏のスナップショット
+    は EBS direct API で読めないが、コピーのものは読める。コピーとそのスナップショットにはタグ
+    ec2-byhand=<image_id> を付け、IAM ポリシーで消せるものをそれだけに絞れるようにする。
+    """
+    tags = [{"Key": TAG_KEY, "Value": image_id}]
+    resp = ec2.copy_image(
+        SourceImageId=image_id,
+        SourceRegion=ec2.meta.region_name,
+        # Unique in the account and region, as AMI names must be.
+        Name=f"ec2-byhand-{image_id}-{time.time_ns()}",
+        Description=f"ec2-byhand: a copy of {image_id} to compare with, deleted after the run",
+        TagSpecifications=[
+            {"ResourceType": "image", "Tags": tags},
+            {"ResourceType": "snapshot", "Tags": tags},
+        ],
+    )
+    return str(resp["ImageId"])
+
+
+def wait_for_image(
+    ec2: Any, image_id: str, on_wait: Callable[[dict[str, str]], None] | None = None
+) -> None:
+    """Wait until the AMI `image_id` (a copy being made) is available, however long
+    that takes. `on_wait` is called after each look that found it unfinished, with
+    its state. A copy that fails raises AwsSourceError.
+
+    AMI `image_id`（作成中のコピー）が使えるようになるまで、どれだけかかっても待つ。`on_wait`
+    は、見に行って未完了だったたびに状態を渡して呼ばれる。失敗したコピーは AwsSourceError。
+    """
+    while True:
+        found = ec2.describe_images(ImageIds=[image_id])["Images"]
+        state = found[0].get("State", "") if found else ""
+        if state == "available":
+            return
+        if state in ("failed", "error", "invalid", "deregistered", "disabled"):
+            why = found[0].get("StateReason", {}).get("Message") or state
+            raise AwsSourceError(msg("ami_copy_failed", copy=image_id, why=why))
+        if on_wait is not None:
+            on_wait({image_id: state})
+        time.sleep(POLL_SECONDS)
+
+
+# How long the snapshots of a copy stopped half way are looked for, after the copy is
+# deregistered: the copy goes on making them, and they appear seconds later.
+COPY_SNAPSHOTS_SECONDS = 120
+
+
+def delete_image(
+    ec2: Any, image_id: str, snapshots: int, wait_seconds: float = COPY_SNAPSHOTS_SECONDS
+) -> list[str]:
+    """Deregister the AMI copy `image_id` this run made and delete its `snapshots`
+    snapshots. Returns what went wrong, for the caller to report, rather than raising:
+    a copy left behind costs money until deleted.
+
+    A copy deregistered before it was available (the run stopped while waiting for it)
+    has its snapshots made all the same, not yet part of it: they are looked for by the
+    description AWS gives them, for at most `wait_seconds`.
+
+    この実行で作った AMI のコピー `image_id` を登録解除し、その `snapshots` 個のスナップショット
+    を消す。失敗は raise せず、呼び出し側が報告できるように返す: 残ったコピーは消すまで課金される。
+    完成前に登録解除したコピー（完了待ちの途中で止めた実行）のスナップショットは、まだコピーに
+    結び付いていないまま作られ続けるので、AWS が付ける説明で最大 `wait_seconds` 秒探して消す。
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    try:
+        resp = ec2.deregister_image(ImageId=image_id, DeleteAssociatedSnapshots=True)
+    except (BotoCoreError, ClientError) as err:
+        return [str(err)]
+    problems = []
+    deleted = set()
+    for r in resp.get("DeleteSnapshotResults", []):
+        if r.get("ReturnCode") == "success":
+            deleted.add(r.get("SnapshotId"))
+        else:
+            problems.append(f"{r.get('SnapshotId', '?')}: {r.get('ReturnCode', '?')}")
+    deadline = time.monotonic() + wait_seconds
+    while len(deleted) + len(problems) < snapshots:
+        # As AWS described them on 2026-11-17: "Copied for DestinationAmi ami-... from
+        # SourceAmi ami-... for SourceSnapshot snap-.... Task created on ..."
+        try:
+            found = ec2.describe_snapshots(
+                OwnerIds=["self"],
+                Filters=[{"Name": "description", "Values": [f"*DestinationAmi {image_id} *"]}],
+            )["Snapshots"]
+        except (BotoCoreError, ClientError) as err:
+            return [*problems, str(err)]
+        for s in found:
+            if s["SnapshotId"] in deleted:
+                continue
+            try:
+                ec2.delete_snapshot(SnapshotId=s["SnapshotId"])
+            except ClientError:
+                continue  # still being made: tried again
+            deleted.add(s["SnapshotId"])
+        if len(deleted) + len(problems) >= snapshots:
+            break
+        if time.monotonic() >= deadline:
+            missing = snapshots - len(deleted) - len(problems)
+            problems.append(msg("copy_snapshots_left", count=missing, tag=TAG_KEY))
+            break
+        time.sleep(POLL_SECONDS)
+    return problems
 
 
 def delete_snapshots(ec2: Any, disks: list[Disk]) -> list[tuple[Disk, str]]:

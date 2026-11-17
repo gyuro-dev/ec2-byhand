@@ -20,8 +20,8 @@ ec2-byhand --instance-id i-0123456789abcdef0 -o out/
 
 どちらも、スナップショットを作り、比較対象と比べ、作ったスナップショットを消す。結果は `out/` に出る。
 
-比較対象を指定しない場合の補足: 起動元が Amazon Linux や Ubuntu などの**公開 AMI** だと、エラーになる。
-公開 AMI のスナップショットは、AWS の制限で直接読めない。AMI を自分のアカウントにコピーして `--baseline-ami` で渡す（[手順](#比較対象baselineの選び方)）。自分で作った AMI なら、そのまま通る。
+比較対象を指定しない場合の補足: 起動元が Amazon Linux や Ubuntu などの**公開 AMI** のとき、そのスナップショットは AWS の制限で直接読めない。
+そこで、スナップショットを作るのと並行して AMI を自分のアカウントにコピーし、最後にコピーを消す（[詳しく](#比較対象baselineの選び方)）。
 
 ```text
 out/
@@ -32,7 +32,8 @@ out/
 └── patches/        差分のパッチ: 設定ファイルなどの書き換えた箇所（patch / git apply で適用できる）
 ```
 
-Python 3.12 以上が必要。認証情報とリージョンは AWS CLI と同じ設定から取る（[必要な権限](#permissions)）。
+Python 3.12 以上が必要。Python が古い環境（CloudShell、Amazon Linux 2023）では、`uv tool install --python 3.12 ec2-byhand` で専用の Python ごと入れられる。\
+認証情報とリージョンは AWS CLI と同じ設定から取る（[必要な権限](#permissions)）。
 
 **料金と時間の目安**: 実測で約 0.03 USD、3〜4 分（ボリューム 3 本で計 117 GiB、ファイル約 5.5 万個の Amazon Linux 2023。一覧だけを出す実行で 4.5 GiB を読んだ）。\
 料金は主に EBS direct API の読み出しで、1,000 ブロック（約 500 MiB）あたり 0.003 USD ほど。スナップショットの保管料金は、実行中の数分ぶんだけ。\
@@ -156,7 +157,7 @@ ec2-byhand --current-image server-root.img server-data.img --baseline-image ami-
 
 | | 現在のサーバー | 比較対象（baseline） |
 |---|---|---|
-| インスタンス | `--instance-id` | 既定で起動元の AMI（公開 AMI は[コピーが必要](#比較対象baselineの選び方)） |
+| インスタンス | `--instance-id` | 既定で起動元の AMI（公開 AMI は[コピーして使う](#比較対象baselineの選び方)） |
 | AMI | | `--baseline-ami` |
 | スナップショット | `--current-snapshot` | `--baseline-snapshot` |
 | ディスクイメージ | `--current-image` | `--baseline-image` |
@@ -175,7 +176,7 @@ ec2-byhand --current-image server-root.img server-data.img --baseline-image ami-
 | `--include-sensitive` | 機密情報を含むファイルの中身も入れ、機密情報とみられる文字列もマスクしない |
 | `--no-archives` | manifest.json と report.txt だけを書く |
 | `--upload s3://bucket/prefix` | 出力を S3 にもアップロードする |
-| `--keep-snapshots` | 作ったスナップショットを残す |
+| `--keep-snapshots` | 作ったスナップショットと、公開 AMI のコピーを残す |
 | `--profile` / `--region` | AWS の設定を上書きする |
 | `--parallel N` | スナップショットのブロックを同時に取得する数（既定 32） |
 | `--verify-checksums` | ext4 / XFS v5 のメタデータのチェックサムを照合する |
@@ -186,7 +187,8 @@ ec2-byhand --current-image server-root.img server-data.img --baseline-image ami-
 
 ### 必要な権限
 
-[docs/iam-policy.json](docs/iam-policy.json) が、実行に必要な最小限（実機で確認済み）。削除できるのは、このツールがタグを付けたスナップショットだけ。\
+[docs/iam-policy.json](docs/iam-policy.json) が、実行に必要な最小限（実機で確認済み）。削除できるのは、このツールがタグを付けたスナップショットと AMI のコピーだけ。\
+`ec2:CopyImage` が無いと、公開 AMI が baseline のときはエラーになり、手で実行する `copy-image` のコマンドが表示される。\
 既定の `aws/ebs` の鍵で暗号化したスナップショットは、追加の権限は不要。カスタマー管理キーなら、そのキーポリシーで `kms:Decrypt` を許可する。\
 `--upload` には [docs/iam-policy-upload.json](docs/iam-policy-upload.json) を追加する（BUCKET と PREFIX は自分のものに置き換える）。
 
@@ -201,8 +203,9 @@ manifest.json はプログラムが読むデータなので、どちらでも英
 ### スナップショットの扱い
 
 スナップショットの完了待ちに上限は無く（大きなボリュームの最初のスナップショットは数時間かかることがある）、数分おきに進捗を表示する。\
-途中で止めた実行（Ctrl+C、SIGTERM、端末や SSH の切断）は、終了時に自分が作ったスナップショットを削除する。\
-強制終了された実行のものは `ec2-byhand=<インスタンス ID>` のタグ付きで残る。`aws ec2 describe-snapshots --owner-ids self --filters Name=tag-key,Values=ec2-byhand` で一覧を取得できる。
+途中で止めた実行（Ctrl+C、SIGTERM、端末や SSH の切断）は、終了時に自分が作ったスナップショットと AMI のコピーを削除する。\
+強制終了された実行のものは `ec2-byhand=<インスタンス ID>`（AMI のコピーとそのスナップショットは `ec2-byhand=<コピー元の AMI>`）のタグ付きで残る。\
+`aws ec2 describe-snapshots --owner-ids self --filters Name=tag-key,Values=ec2-byhand` と `aws ec2 describe-images --owners self --filters Name=tag-key,Values=ec2-byhand` で一覧を取得できる。
 
 ### 比較対象（baseline）の選び方
 
@@ -212,22 +215,8 @@ manifest.json はプログラムが読むデータなので、どちらでも英
 cloud-init が初回起動時に行ったことはバックアップにも入っているので、結果には出なくなる。
 
 **公開 AMI**: 公開 AMI のスナップショットは EBS direct API で読めない（AWS は `Public snapshots are not supported` と返す）。\
-自分のアカウントにコピーして `--baseline-ami <コピー先>` で渡すか、`--no-baseline` を付ける。\
-エラーの最後に、その AMI とリージョンを入れた `copy-image` のコマンドが出る。
-
-```bash
-# 1. 起動元の AMI を調べる
-aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --query 'Reservations[].Instances[].ImageId' --output text
-
-# 2. 自分のアカウントにコピーして、完了を待つ（数分）
-aws ec2 copy-image --source-region ap-northeast-1 --source-image-id ami-0aaaaaaaaaaaaaaaa --name ec2-byhand-baseline
-aws ec2 wait image-available --image-ids ami-0bbbbbbbbbbbbbbbb
-
-# 3. コピーした AMI と比べる
-ec2-byhand --instance-id i-0123456789abcdef0 --baseline-ami ami-0bbbbbbbbbbbbbbbb -o out/
-```
-
-コピーした AMI は、使い終わったら `aws ec2 deregister-image` で登録を解除し、そのスナップショットを `aws ec2 delete-snapshot` で消す。\
+そこで、baseline が公開 AMI（起動元の AMI、または `--baseline-ami`）のときは、同じリージョンで自分のアカウントにコピーし、コピーのスナップショットを読む。\
+`--instance-id` では、スナップショットを作るのと並行してコピーする。コピーとそのスナップショットは、作ったスナップショットと同じく最後に消す（`--keep-snapshots` で残せば、次からは `--baseline-ami` で使える）。\
 Red Hat の RHEL の AMI はコピーできない（`You do not have permission to access the storage of this ami`）ので、`--no-baseline` を使う。
 
 **dpkg（Ubuntu / Debian）**: dpkg は権限・所有者・リンク先を記録しないので、baseline のファイルと比べるのは、両側で同じバージョンのパッケージのファイルだけ。\
@@ -253,7 +242,7 @@ report.txt には、manifest.json に無いことは書かない。\
 各項目には、最終変更時刻 `ctime` が付く（カーネルが付ける時刻で、`touch` では変えられない）。まとめには、手作業がいつからいつの間に行われたかを出す。\
 ACL（`setfacl`）・ケーパビリティ（`setcap`）などの拡張属性もパスの一部として比べる: それだけが変わっても報告し（`changed: xattrs`）、付いている属性の名前を `xattrs` に出す。値はアーカイブに入る。\
 SELinux のラベルも比べる: `chcon` は `changed: selinux` として出て、今のラベルが付く。片側にしかラベルが無いとき（SELinux の有効・無効を切り替えた）は、パスごとの変更とは数えない。\
-比べるのは手動で配置されたパスだけで、パッケージのファイルのラベルと拡張属性は比べない（パッケージ自身のスクリプトが付けるため）。\
+パッケージのファイルの拡張属性（`/usr/bin/node` への `setcap`、`/var/www` への `setfacl` など）は、baseline に同じ版のパッケージがあるときだけ baseline と比べる（`problems: xattrs`）。パッケージ自身のスクリプトが付けるものがあり、アップグレードで付け直されるため。パッケージのファイルの SELinux のラベルは比べない。\
 サーバー上で root しか読めないファイルの写しも入るので、Linux と macOS では実行した本人だけが読める。Windows では出力先フォルダのアクセス権で守ること。
 
 ### 大きなファイル・大きなサーバー

@@ -47,6 +47,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -431,14 +432,33 @@ def make_aws_clients(region: str | None, profile: str | None) -> tuple[Any, Any]
     return session.client("ec2", config=config), session.client("ebs", config=ebs_config)
 
 
+class _PublicImage(Exception):
+    """The baseline AMI is public: the EBS direct APIs do not read its snapshots."""
+
+    def __init__(self, image_id: str) -> None:
+        super().__init__(image_id)
+        self.image_id = image_id
+
+
+@dataclass(frozen=True)
+class _Copying:
+    """A baseline still being copied into the account: `copy` of the public AMI `image_id`."""
+
+    image_id: str
+    copy: str
+
+
 class _Aws:
-    """The AWS side of one run: clients made on first use, snapshots it made."""
+    """The AWS side of one run: clients made on first use, snapshots and AMI copies it made."""
 
     def __init__(self, args: argparse.Namespace) -> None:
         self._args = args
         self._clients: tuple[Any, Any] | None = None
         self.created: list[Disk] = []  # the snapshots --instance-id made
         self.not_deleted: list[str] = []  # of those, the ids cleanup could not delete
+        self.copies: list[str] = []  # the AMI copies made of a public baseline AMI
+        self.copies_not_deleted: list[str] = []  # of those, the ids cleanup could not delete
+        self._copy_snapshots: dict[str, int] = {}  # how many snapshots each copy has
         # --instance-id: the device name of each of its volumes, by serial number. It
         # names the disks of snapshots given by id too, when they are of these volumes
         # (a backup as the baseline), so that an fstab's /dev/xvdf finds them.
@@ -463,15 +483,62 @@ class _Aws:
         mib = sum(d.stats.block_bytes for d in self.devices) / (1 << 20)
         _progress(self._args, msg("read_so_far", reads=reads, mib=mib))
 
-    def report_wait(self, progress: dict[str, str]) -> None:
-        """Say how far the snapshots waited for are, at most every WAIT_PROGRESS_SECONDS:
-        the first snapshot of a large volume takes hours."""
+    def report_wait(self, progress: dict[str, str], copy: bool = False) -> None:
+        """Say how far the snapshots (or the AMI `copy`) waited for are, at most every
+        WAIT_PROGRESS_SECONDS: the first snapshot of a large volume takes hours."""
         now = time.monotonic()
         if now - self._last_report < WAIT_PROGRESS_SECONDS:
             return
         self._last_report = now
         each = ", ".join(f"{snapshot} {done}".strip() for snapshot, done in progress.items())
-        _progress(self._args, msg("snapshots_progress", progress=each))
+        if copy:
+            _progress(self._args, msg("copy_progress", progress=each))
+        else:
+            _progress(self._args, msg("snapshots_progress", progress=each))
+
+    def start_copy(self, image_id: str, snapshots: int) -> _Copying:
+        """Start copying the public AMI `image_id`, which has `snapshots` snapshots, into
+        this account (the EBS direct APIs read the copy's snapshots, not its own); the
+        copy is deleted when the run ends."""
+        from botocore.exceptions import ClientError
+
+        from ec2_byhand.aws.snapshots import AwsSourceError, copy_image
+
+        try:
+            copy = copy_image(self.clients[0], image_id)
+        except ClientError as err:
+            error = err.response.get("Error", {})
+            code = error.get("Code", "")
+            # Missing permissions: the user may still copy it by hand. Otherwise the AMI
+            # is one that cannot be copied at all (Red Hat's RHEL AMIs, on 2026-11-13).
+            denied = code in ("UnauthorizedOperation", "AccessDenied", "AccessDeniedException")
+            raise AwsSourceError(
+                msg(
+                    "cannot_copy_ami",
+                    image=image_id,
+                    code=code,
+                    why=error.get("Message", ""),
+                    next_step=msg("copy_ami_denied" if denied else "copy_ami_refused"),
+                ),
+                self._copy_image_command(image_id) if denied else "",
+            ) from err
+        self.copies.append(copy)
+        self._copy_snapshots[copy] = snapshots
+        _progress(self._args, msg("copying_ami", image=image_id, copy=copy))
+        return _Copying(image_id, copy)
+
+    def open_copy(self, copying: _Copying, verify: bool) -> Snapshot:
+        """Wait for the AMI copy to be available, then open its snapshots as the baseline."""
+        from ec2_byhand.aws.snapshots import image_disks, wait_for_image
+
+        _progress(self._args, msg("waiting_for_copy", copy=copying.copy))
+        wait_for_image(
+            self.clients[0], copying.copy, lambda done: self.report_wait(done, copy=True)
+        )
+        baseline = self.open(image_disks(self.clients[0], copying.copy), "baseline", verify)
+        # The manifest's data: in English whatever the language of the messages.
+        baseline.label = f"{copying.image_id} (copied as {copying.copy}) {baseline.label}"
+        return baseline
 
     def _copy_image_command(self, image_id: str) -> str:
         """The AWS CLI command that copies `image_id` into this account, for the same
@@ -496,6 +563,7 @@ class _Aws:
         snapshots = " ".join(d.snapshot_id for d in disks)
         _progress(self._args, msg("reading_snapshots", label=label, snapshots=snapshots))
         devices: dict[str, BlockDevice] = {}
+        opened = len(self.devices)
         for d in disks:
             try:
                 dev = EbsSnapshotDevice(
@@ -517,12 +585,10 @@ class _Aws:
                     "ResourceNotFoundException",
                 ):
                     raise
-                next_step = command = ""
                 if label == "baseline" and public and image_id:
-                    next_step = msg("blocks_copy_ami")
-                    command = self._copy_image_command(image_id)
-                elif label == "baseline":
-                    next_step = msg("blocks_next_step")
+                    del self.devices[opened:]  # the copy is read instead
+                    raise _PublicImage(image_id) from err
+                next_step = msg("blocks_next_step") if label == "baseline" else ""
                 raise AwsSourceError(
                     msg(
                         "cannot_read_blocks",
@@ -531,8 +597,7 @@ class _Aws:
                         code=code,
                         reason=msg("blocks_public" if public else "blocks_denied"),
                         next_step=next_step,
-                    ),
-                    command,
+                    )
                 ) from err
             self.devices.append(dev)
             devices[d.device] = dev
@@ -570,8 +635,41 @@ class _Aws:
             dev.close()
 
     def cleanup(self) -> None:
-        """Delete the snapshots this run made, unless asked to keep them, saying which:
-        after an error or Ctrl+C nothing else tells whether they still cost money."""
+        """Delete the snapshots and AMI copies this run made, unless asked to keep them,
+        saying which: after an error or Ctrl+C nothing else tells whether they still
+        cost money."""
+        try:
+            self._cleanup_snapshots()
+        finally:
+            self._cleanup_copies()
+
+    def _cleanup_copies(self) -> None:
+        """Deregister the AMI copies this run made, with their snapshots."""
+        from ec2_byhand.aws.snapshots import delete_image
+
+        if not self.copies:
+            return
+        ids = " ".join(self.copies)
+        if self._args.keep_snapshots:
+            _say(msg("keeping_copies", ids=ids))  # even with --quiet: they cost money
+            return
+        _progress(self._args, msg("deleting_copies", ids=ids))
+        left = list(self.copies)
+        try:
+            for copy in self.copies:
+                for why in delete_image(self.clients[0], copy, self._copy_snapshots[copy]):
+                    _say(msg("could_not_delete", snapshot=copy, why=why))
+                    if copy not in self.copies_not_deleted:
+                        self.copies_not_deleted.append(copy)
+                left.remove(copy)
+        except BaseException:  # Ctrl+C again, or the session lost, while deleting
+            _say(msg("copies_left", ids=" ".join(left)))
+            raise
+        if not self.copies_not_deleted:
+            _progress(self._args, msg("copies_deleted"))
+
+    def _cleanup_snapshots(self) -> None:
+        """Delete the snapshots --instance-id made."""
         from ec2_byhand.aws.snapshots import delete_snapshots
 
         if not self.created:
@@ -600,8 +698,10 @@ class _Aws:
 
 def _baseline_side(
     args: argparse.Namespace, aws: _Aws, stack: ExitStack, image_id: str | None, verify: bool
-) -> Snapshot | None:
-    """Open the baseline side, whichever way the arguments (or the AMI) name it."""
+) -> Snapshot | _Copying | None:
+    """Open the baseline side, whichever way the arguments (or the AMI) name it. A public
+    AMI is copied into the account first: the copy started is returned, for the caller
+    to wait for (with --instance-id, while the current snapshots are taken)."""
     from ec2_byhand.aws.snapshots import Disk, image_disks
 
     if args.no_baseline:
@@ -615,7 +715,11 @@ def _baseline_side(
             [Disk(f"disk{i}", s) for i, s in enumerate(args.baseline_snapshot)], "baseline", verify
         )
     if image_id:
-        baseline = aws.open(image_disks(aws.clients[0], image_id), "baseline", verify, image_id)
+        disks = image_disks(aws.clients[0], image_id)
+        try:
+            baseline = aws.open(disks, "baseline", verify, image_id)
+        except _PublicImage:
+            return aws.start_copy(image_id, len(disks))
         baseline.label = f"{image_id} {baseline.label}"
         return baseline
     return None
@@ -658,6 +762,8 @@ def _sides(
         )
         baseline = _baseline_side(args, aws, stack, image_id, verify)
     current.label = args.label or current.label
+    if isinstance(baseline, _Copying):
+        baseline = aws.open_copy(baseline, verify)
     return current, baseline
 
 
@@ -756,6 +862,9 @@ def run(args: argparse.Namespace) -> int:
             ]
             if made:
                 print(row("snapshots_made", msg("snapshots_made", ids=" ".join(made), fate=fate)))
+            copies = [c for c in aws.copies if (c in aws.copies_not_deleted) == left]
+            if copies:
+                print(row("copies_made", msg("snapshots_made", ids=" ".join(copies), fate=fate)))
     if s3 is not None:
         return _upload(args, s3, m, outdir)
     return 0
