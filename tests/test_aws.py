@@ -23,6 +23,7 @@ from conftest import GOLDEN_DIR
 
 from diskread import BytesDevice, DiskReadError, FileDevice
 from ec2_byhand import cli
+from ec2_byhand.aws import snapshots as snapshots_module
 from ec2_byhand.aws.ebs import (
     FETCH_ATTEMPTS,
     READ_AHEAD_BLOCKS,
@@ -741,6 +742,41 @@ def test_a_public_ami_that_cannot_be_copied_is_explained(
     assert lines[1:] == ([expected] if command else [])
 
 
+def _copy_snapshots_params(copy: str = "ami-0copy") -> dict:
+    return {
+        "OwnerIds": ["self"],
+        "Filters": [{"Name": "description", "Values": [f"*DestinationAmi {copy} *"]}],
+    }
+
+
+def test_a_copy_snapshot_that_does_not_appear_is_reported(ec2, monkeypatch) -> None:
+    client, stub = ec2
+    stub.add_response(
+        "deregister_image",
+        {"Return": True, "DeleteSnapshotResults": []},
+        {"ImageId": "ami-0copy", "DeleteAssociatedSnapshots": True},
+    )
+    # Not there yet, then one of two there but still refused, then the time is up.
+    stub.add_response("describe_snapshots", {"Snapshots": []}, _copy_snapshots_params())
+    stub.add_response(
+        "describe_snapshots",
+        {"Snapshots": [{"SnapshotId": "snap-copy", "State": "pending"}]},
+        _copy_snapshots_params(),
+    )
+    stub.add_client_error(
+        "delete_snapshot", "IncorrectState", "pending", expected_params={"SnapshotId": "snap-copy"}
+    )
+    clock = iter([0.0, 0.0, 200.0])
+    monkeypatch.setattr(snapshots_module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(snapshots_module.time, "sleep", lambda s: None)
+    problems = snapshots_module.delete_image(client, "ami-0copy", 2, wait_seconds=120)
+    left = (
+        "2 snapshot(s) of the copy, stopped before it was done, were not there to delete yet; "
+        "they carry the tag ec2-byhand"
+    )
+    assert problems == [left]
+
+
 @pytest.mark.parametrize("keep", [False, True])
 def test_the_copy_is_deleted_when_the_run_is_stopped(
     ec2, monkeypatch, tmp_path: Path, capsys, keep: bool
@@ -764,11 +800,19 @@ def test_the_copy_is_deleted_when_the_run_is_stopped(
     )
     if not keep:
         stub.add_response("delete_snapshot", {}, {"SnapshotId": "snap-now"})
+        # Deregistered before it was available: its snapshot is not part of it yet (as
+        # on AWS on 2026-11-17), so it is looked for and deleted on its own.
         stub.add_response(
             "deregister_image",
             {"Return": True, "DeleteSnapshotResults": []},
             {"ImageId": "ami-0copy", "DeleteAssociatedSnapshots": True},
         )
+        stub.add_response(
+            "describe_snapshots",
+            {"Snapshots": [{"SnapshotId": "snap-copy", "State": "pending"}]},
+            _copy_snapshots_params(),
+        )
+        stub.add_response("delete_snapshot", {}, {"SnapshotId": "snap-copy"})
 
     def ctrl_c(seconds: float) -> None:
         raise KeyboardInterrupt

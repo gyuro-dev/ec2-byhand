@@ -125,6 +125,10 @@ TEXTS: dict[str, dict[str, str]] = {
         ),
         "deleting_copies": "deleting the AMI copies this run made, and their snapshots: {ids}",
         "copies_deleted": "AMI copies deleted",
+        "copy_snapshots_left": (
+            "{count} snapshot(s) of the copy, stopped before it was done, were not there "
+            "to delete yet; they carry the tag {tag}"
+        ),
         "copies_left": "warning: stopped while deleting the AMI copies; still there, "
         "deregister them and delete their snapshots by hand: {ids}",
         # --- what there is to read, said before reading it ---
@@ -377,6 +381,10 @@ TEXTS: dict[str, dict[str, str]] = {
             "この実行で作成した AMI のコピーとそのスナップショットを削除します: {ids}"
         ),
         "copies_deleted": "AMI のコピーを削除しました",
+        "copy_snapshots_left": (
+            "完了前に止めたコピーのスナップショット {count} 個が、まだ削除できる状態に"
+            "なっていませんでした。タグ {tag} が付いています"
+        ),
         "copies_left": "警告: AMI のコピーの削除が途中で止まりました。残っているものの登録を"
         "解除し、そのスナップショットを手動で削除してください: {ids}",
         # --- what there is to read, said before reading it ---

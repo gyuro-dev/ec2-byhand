@@ -458,6 +458,7 @@ class _Aws:
         self.not_deleted: list[str] = []  # of those, the ids cleanup could not delete
         self.copies: list[str] = []  # the AMI copies made of a public baseline AMI
         self.copies_not_deleted: list[str] = []  # of those, the ids cleanup could not delete
+        self._copy_snapshots: dict[str, int] = {}  # how many snapshots each copy has
         # --instance-id: the device name of each of its volumes, by serial number. It
         # names the disks of snapshots given by id too, when they are of these volumes
         # (a backup as the baseline), so that an fstab's /dev/xvdf finds them.
@@ -495,9 +496,10 @@ class _Aws:
         else:
             _progress(self._args, msg("snapshots_progress", progress=each))
 
-    def start_copy(self, image_id: str) -> _Copying:
-        """Start copying the public AMI `image_id` into this account (the EBS direct APIs
-        read the copy's snapshots, not its own); the copy is deleted when the run ends."""
+    def start_copy(self, image_id: str, snapshots: int) -> _Copying:
+        """Start copying the public AMI `image_id`, which has `snapshots` snapshots, into
+        this account (the EBS direct APIs read the copy's snapshots, not its own); the
+        copy is deleted when the run ends."""
         from botocore.exceptions import ClientError
 
         from ec2_byhand.aws.snapshots import AwsSourceError, copy_image
@@ -521,6 +523,7 @@ class _Aws:
                 self._copy_image_command(image_id) if denied else "",
             ) from err
         self.copies.append(copy)
+        self._copy_snapshots[copy] = snapshots
         _progress(self._args, msg("copying_ami", image=image_id, copy=copy))
         return _Copying(image_id, copy)
 
@@ -654,7 +657,7 @@ class _Aws:
         left = list(self.copies)
         try:
             for copy in self.copies:
-                for why in delete_image(self.clients[0], copy):
+                for why in delete_image(self.clients[0], copy, self._copy_snapshots[copy]):
                     _say(msg("could_not_delete", snapshot=copy, why=why))
                     if copy not in self.copies_not_deleted:
                         self.copies_not_deleted.append(copy)
@@ -712,10 +715,11 @@ def _baseline_side(
             [Disk(f"disk{i}", s) for i, s in enumerate(args.baseline_snapshot)], "baseline", verify
         )
     if image_id:
+        disks = image_disks(aws.clients[0], image_id)
         try:
-            baseline = aws.open(image_disks(aws.clients[0], image_id), "baseline", verify, image_id)
+            baseline = aws.open(disks, "baseline", verify, image_id)
         except _PublicImage:
-            return aws.start_copy(image_id)
+            return aws.start_copy(image_id, len(disks))
         baseline.label = f"{image_id} {baseline.label}"
         return baseline
     return None

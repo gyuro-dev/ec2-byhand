@@ -240,13 +240,26 @@ def wait_for_image(
         time.sleep(POLL_SECONDS)
 
 
-def delete_image(ec2: Any, image_id: str) -> list[str]:
-    """Deregister the AMI copy this run made and delete its snapshots. Returns what
-    went wrong, for the caller to report, rather than raising: a copy left behind
-    costs money until deleted.
+# How long the snapshots of a copy stopped half way are looked for, after the copy is
+# deregistered: the copy goes on making them, and they appear seconds later.
+COPY_SNAPSHOTS_SECONDS = 120
 
-    この実行で作った AMI のコピーを登録解除し、そのスナップショットを消す。失敗は raise せず、
-    呼び出し側が報告できるように返す: 残ったコピーは消すまで課金される。
+
+def delete_image(
+    ec2: Any, image_id: str, snapshots: int, wait_seconds: float = COPY_SNAPSHOTS_SECONDS
+) -> list[str]:
+    """Deregister the AMI copy `image_id` this run made and delete its `snapshots`
+    snapshots. Returns what went wrong, for the caller to report, rather than raising:
+    a copy left behind costs money until deleted.
+
+    A copy deregistered before it was available (the run stopped while waiting for it)
+    has its snapshots made all the same, not yet part of it: they are looked for by the
+    description AWS gives them, for at most `wait_seconds`.
+
+    この実行で作った AMI のコピー `image_id` を登録解除し、その `snapshots` 個のスナップショット
+    を消す。失敗は raise せず、呼び出し側が報告できるように返す: 残ったコピーは消すまで課金される。
+    完成前に登録解除したコピー（完了待ちの途中で止めた実行）のスナップショットは、まだコピーに
+    結び付いていないまま作られ続けるので、AWS が付ける説明で最大 `wait_seconds` 秒探して消す。
     """
     from botocore.exceptions import BotoCoreError, ClientError
 
@@ -254,11 +267,40 @@ def delete_image(ec2: Any, image_id: str) -> list[str]:
         resp = ec2.deregister_image(ImageId=image_id, DeleteAssociatedSnapshots=True)
     except (BotoCoreError, ClientError) as err:
         return [str(err)]
-    return [
-        f"{r.get('SnapshotId', '?')}: {r.get('ReturnCode', '?')}"
-        for r in resp.get("DeleteSnapshotResults", [])
-        if r.get("ReturnCode") != "success"
-    ]
+    problems = []
+    deleted = set()
+    for r in resp.get("DeleteSnapshotResults", []):
+        if r.get("ReturnCode") == "success":
+            deleted.add(r.get("SnapshotId"))
+        else:
+            problems.append(f"{r.get('SnapshotId', '?')}: {r.get('ReturnCode', '?')}")
+    deadline = time.monotonic() + wait_seconds
+    while len(deleted) + len(problems) < snapshots:
+        # As AWS described them on 2026-11-17: "Copied for DestinationAmi ami-... from
+        # SourceAmi ami-... for SourceSnapshot snap-.... Task created on ..."
+        try:
+            found = ec2.describe_snapshots(
+                OwnerIds=["self"],
+                Filters=[{"Name": "description", "Values": [f"*DestinationAmi {image_id} *"]}],
+            )["Snapshots"]
+        except (BotoCoreError, ClientError) as err:
+            return [*problems, str(err)]
+        for s in found:
+            if s["SnapshotId"] in deleted:
+                continue
+            try:
+                ec2.delete_snapshot(SnapshotId=s["SnapshotId"])
+            except ClientError:
+                continue  # still being made: tried again
+            deleted.add(s["SnapshotId"])
+        if len(deleted) + len(problems) >= snapshots:
+            break
+        if time.monotonic() >= deadline:
+            missing = snapshots - len(deleted) - len(problems)
+            problems.append(msg("copy_snapshots_left", count=missing, tag=TAG_KEY))
+            break
+        time.sleep(POLL_SECONDS)
+    return problems
 
 
 def delete_snapshots(ec2: Any, disks: list[Disk]) -> list[tuple[Disk, str]]:
