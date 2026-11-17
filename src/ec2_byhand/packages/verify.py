@@ -83,21 +83,25 @@ from ec2_byhand.archive import SKIP_XATTRS
 from ec2_byhand.packages.model import PackageDB, PackageFile
 
 SELINUX_LABEL = "security.selinux"
+# SELinux's own: the label, and the digest a recursive restorecon leaves on a directory
+# to skip it next time (cloud-init does one on /etc/ssh at first boot, seen on AL2023).
+SELINUX_XATTRS = frozenset({SELINUX_LABEL, "security.sehash"})
 
 
 def xattr_settings(attrs: dict[str, bytes]) -> dict[str, bytes]:
     """Of a path's extended attributes, those that are settings someone made: ACLs,
-    capabilities (setcap), user.* and the like. Not the SELinux label, which every file
-    has and a policy update relabels; not XFS's raw copies of the ACLs.
+    capabilities (setcap), user.* and the like. Not SELinux's own (the label every file
+    has and a policy update relabels, the digest restorecon leaves); not XFS's raw
+    copies of the ACLs.
 
-    パスの拡張属性のうち、誰かが設定したもの: ACL・ケーパビリティ（setcap）・user.* など。どの
-    ファイルにもあってポリシーの更新で付け直される SELinux のラベルと、XFS の ACL の生のコピー
-    は除く。
+    パスの拡張属性のうち、誰かが設定したもの: ACL・ケーパビリティ（setcap）・user.* など。
+    SELinux 自身のもの（どのファイルにもあってポリシーの更新で付け直されるラベル、restorecon
+    が残すハッシュ）と、XFS の ACL の生のコピーは除く。
     """
     return {
         name: value
         for name, value in attrs.items()
-        if name != SELINUX_LABEL and name not in SKIP_XATTRS
+        if name not in SELINUX_XATTRS and name not in SKIP_XATTRS
     }
 
 

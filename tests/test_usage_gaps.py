@@ -236,8 +236,10 @@ def test_setcap_and_setfacl_on_package_files_are_shown(version_now: str) -> None
         fs.set_xattr("/usr/bin/ping", "security.capability", CAP_NET_RAW)
     after.set_xattr("/usr/bin/node", "security.capability", CAP_NET_BIND_SERVICE)
     after.set_xattr("/var/www", "system.posix_acl_access", b"\x02\x00\x00\x00")
-    # A relabel is not hand work on a package file: the label is left out.
+    # A relabel is not hand work on a package file: the label is left out, and so is the
+    # digest a recursive restorecon leaves (cloud-init's on /etc/ssh, seen on AL2023).
     after.set_xattr("/usr/bin/plain", "security.selinux", b"system_u:object_r:bin_t:s0\0")
+    after.set_xattr("/var/www", "security.sehash", bytes(32))
     item = _items(analyze(_snap(after), _snap(before)), "modified_package_files")
     if version_now != "1.0":
         # Upgraded since: its scripts may have set them again, so it is not compared.
