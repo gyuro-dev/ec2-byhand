@@ -18,7 +18,7 @@ import boto3
 import botocore.waiter
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
-from botocore.stub import Stubber
+from botocore.stub import ANY, Stubber
 from conftest import GOLDEN_DIR
 
 from diskread import BytesDevice, DiskReadError, FileDevice
@@ -573,16 +573,18 @@ class DeniedEbs(FakeEbs):
         raise ClientError(self._error, "ListSnapshotBlocks")
 
 
-@pytest.mark.parametrize(
-    ("code", "message", "reason"),
-    [
-        # What AWS answered on 2026-11-13 for the snapshot behind the public AL2023 AMI.
-        ("ValidationException", "Public snapshots are not supported", "public snapshot"),
-        ("AccessDeniedException", "not authorized", "IAM policy"),
-    ],
-)
-def test_unreadable_public_ami_snapshot_is_explained(
-    ec2, monkeypatch, tmp_path: Path, capsys, code: str, message: str, reason: str
+def _image_response(image_id: str, snapshot: str, state: str | None = None) -> dict:
+    image: dict = {
+        "ImageId": image_id,
+        "BlockDeviceMappings": [{"DeviceName": "/dev/xvda", "Ebs": {"SnapshotId": snapshot}}],
+    }
+    if state:
+        image["State"] = state
+    return {"Images": [image]}
+
+
+def test_unreadable_baseline_snapshot_is_explained(
+    ec2, monkeypatch, tmp_path: Path, capsys
 ) -> None:
     client, stub = ec2
     stub.add_response(
@@ -591,39 +593,196 @@ def test_unreadable_public_ami_snapshot_is_explained(
         {"InstanceIds": ["i-0abc"]},
     )
     stub.add_response(
-        "describe_images",
-        {
-            "Images": [
-                {
-                    "ImageId": "ami-0base",
-                    "BlockDeviceMappings": [
-                        {"DeviceName": "/dev/xvda", "Ebs": {"SnapshotId": "snap-ami"}}
-                    ],
-                }
-            ]
-        },
-        {"ImageIds": ["ami-0base"]},
+        "describe_images", _image_response("ami-0base", "snap-ami"), {"ImageIds": ["ami-0base"]}
     )
-    ebs = DeniedEbs(code, message)
+    ebs = DeniedEbs("AccessDeniedException", "not authorized")
     monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, ebs))
-    argv = ["--instance-id", "i-0abc", "-o", str(tmp_path / "o"), "-q", "--profile", "my work"]
+    argv = ["--instance-id", "i-0abc", "-o", str(tmp_path / "o"), "-q"]
     assert cli.main(argv) == 2
     err = capsys.readouterr().err
     assert "snap-ami" in err
-    assert reason in err
+    assert "IAM policy" in err
     assert "copy-image" in err
     assert "--baseline-ami" in err  # a running server cannot be launched again from a copy
     assert "--no-baseline" in err
     assert "launch" not in err
-    # For a public AMI, the command to copy follows on a line of its own: this AMI, this
-    # run's region and profile.
-    command = (
+    lines = err.splitlines()
+    assert lines[0].startswith("ec2-byhand: error: baseline: cannot read the blocks of snap-ami")
+    assert lines[1:] == []
+
+
+class PublicAmiEbs(FakeEbs):
+    """Golden images as snapshots, refusing those in `public` as AWS does the snapshots
+    behind a public AMI (what it answered on 2026-11-13 for the public AL2023 AMI)."""
+
+    def __init__(self, images: dict[str, Path | bytes], public: set[str]) -> None:
+        super().__init__(images)
+        self._public = public
+
+    def list_snapshot_blocks(self, SnapshotId, MaxResults, NextToken=None, StartingBlockIndex=None):
+        if SnapshotId in self._public:
+            error = {"Code": "ValidationException", "Message": "Public snapshots are not supported"}
+            raise ClientError({"Error": error}, "ListSnapshotBlocks")
+        return super().list_snapshot_blocks(SnapshotId, MaxResults, NextToken, StartingBlockIndex)
+
+
+def _copy_params(image_id: str = "ami-0base") -> dict:
+    tags = [{"Key": TAG_KEY, "Value": image_id}]
+    return {
+        "SourceImageId": image_id,
+        "SourceRegion": "us-east-1",
+        "Name": ANY,
+        "Description": ANY,
+        "TagSpecifications": [
+            {"ResourceType": "image", "Tags": tags},
+            {"ResourceType": "snapshot", "Tags": tags},
+        ],
+    }
+
+
+def _stub_public_instance(stub: Stubber) -> None:
+    """The instance, launched from a public AMI."""
+    stub.add_response(
+        "describe_instances",
+        _instance_response({"/dev/xvda": "vol-1"}),
+        {"InstanceIds": ["i-0abc"]},
+    )
+    stub.add_response(
+        "describe_images", _image_response("ami-0base", "snap-ami"), {"ImageIds": ["ami-0base"]}
+    )
+
+
+def test_a_public_ami_is_copied_while_the_snapshots_are_taken(
+    ec2, monkeypatch, tmp_path: Path, capsys
+) -> None:
+    _need_images()
+    client, stub = ec2
+    _stub_public_instance(stub)
+    # The copy is started before the snapshots, so that it is made while they are.
+    stub.add_response("copy_image", {"ImageId": "ami-0copy"}, _copy_params())
+    stub.add_response(
+        "create_snapshots", {"Snapshots": [{"SnapshotId": "snap-now", "VolumeId": "vol-1"}]}
+    )
+    stub.add_response(
+        "describe_snapshots",
+        {"Snapshots": [{"SnapshotId": "snap-now", "State": "completed"}]},
+        {"SnapshotIds": ["snap-now"]},
+    )
+    for state in ("pending", "available"):
+        stub.add_response(
+            "describe_images",
+            _image_response("ami-0copy", "snap-copy", state),
+            {"ImageIds": ["ami-0copy"]},
+        )
+    stub.add_response(
+        "describe_images", _image_response("ami-0copy", "snap-copy"), {"ImageIds": ["ami-0copy"]}
+    )
+    # Both deleted at the end: the snapshot, then the copy with its snapshot.
+    stub.add_response("delete_snapshot", {}, {"SnapshotId": "snap-now"})
+    stub.add_response(
+        "deregister_image",
+        {
+            "Return": True,
+            "DeleteSnapshotResults": [{"SnapshotId": "snap-copy", "ReturnCode": "success"}],
+        },
+        {"ImageId": "ami-0copy", "DeleteAssociatedSnapshots": True},
+    )
+    fake = PublicAmiEbs(
+        {"snap-now": CURRENT, "snap-ami": BASELINE, "snap-copy": BASELINE}, {"snap-ami"}
+    )
+    monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, fake))
+    monkeypatch.setattr(botocore.waiter.time, "sleep", lambda s: None)  # the pause between looks
+
+    out_aws, out_files = tmp_path / "aws", tmp_path / "files"
+    assert cli.main(["--instance-id", "i-0abc", "-o", str(out_aws)]) == 0
+    captured = capsys.readouterr()
+    assert "copying it into this account as ami-0copy (deleted at the end)" in captured.err
+    assert "AMI copies made:        ami-0copy (deleted)" in captured.out
+    assert "snapshots made:         snap-now (deleted)" in captured.out
+    argv = ["--current-image", str(CURRENT), "--baseline-image", str(BASELINE), "-o"]
+    assert cli.main([*argv, str(out_files), "-q"]) == 0
+    a = json.loads((out_aws / "manifest.json").read_text(encoding="utf-8"))
+    f = json.loads((out_files / "manifest.json").read_text(encoding="utf-8"))
+    assert a["baseline"]["label"] == "ami-0base (copied as ami-0copy) /dev/xvda=snap-copy"
+    for key in ("hand_placed", "modified_package_files", "deleted", "packages", "summary"):
+        assert a[key] == f[key], key
+    assert not [g for g in fake.gets if g[0] == "snap-ami"]
+
+
+@pytest.mark.parametrize(
+    ("code", "message", "command"),
+    [
+        # What AWS answered on 2026-11-13 for a RHEL AMI: it cannot be copied at all.
+        ("InvalidRequest", "You do not have permission to access the storage of this ami", False),
+        # The IAM policy does not allow it: the user may still copy it by hand.
+        ("UnauthorizedOperation", "You are not authorized to perform this operation.", True),
+    ],
+)
+def test_a_public_ami_that_cannot_be_copied_is_explained(
+    ec2, monkeypatch, tmp_path: Path, capsys, code: str, message: str, command: bool
+) -> None:
+    client, stub = ec2
+    _stub_public_instance(stub)
+    stub.add_client_error("copy_image", code, message, expected_params=_copy_params())
+    # Nothing else: no snapshot is taken for a run that cannot have its baseline.
+    ebs = PublicAmiEbs({}, {"snap-ami"})
+    monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, ebs))
+    argv = ["--instance-id", "i-0abc", "-o", str(tmp_path / "o"), "-q", "--profile", "my work"]
+    assert cli.main(argv) == 2
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].startswith("ec2-byhand: error: baseline: ami-0base is a public AMI")
+    assert f"({code}: {message})" in lines[0]
+    assert "--no-baseline" in lines[0]
+    # The command to copy it, on a line of its own: this AMI, this run's region and profile.
+    expected = (
         "    aws ec2 copy-image --profile 'my work' --region us-east-1 --source-region us-east-1 "
         "--source-image-id ami-0base --name ec2-byhand-baseline"
     )
-    lines = err.splitlines()
-    assert lines[0].startswith("ec2-byhand: error: baseline: cannot read the blocks of snap-ami")
-    assert lines[1:] == ([command] if code == "ValidationException" else [])
+    assert lines[1:] == ([expected] if command else [])
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_the_copy_is_deleted_when_the_run_is_stopped(
+    ec2, monkeypatch, tmp_path: Path, capsys, keep: bool
+) -> None:
+    _need_images()
+    client, stub = ec2
+    _stub_public_instance(stub)
+    stub.add_response("copy_image", {"ImageId": "ami-0copy"}, _copy_params())
+    stub.add_response(
+        "create_snapshots", {"Snapshots": [{"SnapshotId": "snap-now", "VolumeId": "vol-1"}]}
+    )
+    stub.add_response(
+        "describe_snapshots",
+        {"Snapshots": [{"SnapshotId": "snap-now", "State": "completed"}]},
+        {"SnapshotIds": ["snap-now"]},
+    )
+    stub.add_response(
+        "describe_images",
+        _image_response("ami-0copy", "snap-copy", "pending"),
+        {"ImageIds": ["ami-0copy"]},
+    )
+    if not keep:
+        stub.add_response("delete_snapshot", {}, {"SnapshotId": "snap-now"})
+        stub.add_response(
+            "deregister_image",
+            {"Return": True, "DeleteSnapshotResults": []},
+            {"ImageId": "ami-0copy", "DeleteAssociatedSnapshots": True},
+        )
+
+    def ctrl_c(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    ebs = PublicAmiEbs({"snap-now": CURRENT}, {"snap-ami"})
+    monkeypatch.setattr(cli, "make_aws_clients", lambda region, profile: (client, ebs))
+    monkeypatch.setattr(botocore.waiter.time, "sleep", ctrl_c)  # stopped waiting for the copy
+    argv = ["--instance-id", "i-0abc", "-o", str(tmp_path / "o"), "-q"]
+    assert cli.main([*argv, "--keep-snapshots"] if keep else argv) == 130
+    err = capsys.readouterr().err
+    if keep:
+        assert "keeping the AMI copies: ami-0copy (--baseline-ami takes them" in err
+    else:
+        assert "keeping" not in err
 
 
 def test_public_baseline_snapshot_given_by_id_has_no_ami_to_copy(

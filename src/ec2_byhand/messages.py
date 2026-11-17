@@ -82,13 +82,27 @@ TEXTS: dict[str, dict[str, str]] = {
             "with --baseline-ami, pass snapshots you own with --baseline-snapshot, "
             "or compare with nothing using --no-baseline."
         ),
-        "blocks_copy_ami": (
-            " Copy the AMI into this account with the command below; it prints the id "
-            "of the copy. When the copy is available (minutes), run this again with "
-            "--baseline-ami and that id. Or pass snapshots you own with "
-            "--baseline-snapshot, or compare with nothing using --no-baseline."
+        "cannot_copy_ami": (
+            "baseline: {image} is a public AMI, whose snapshots the EBS direct APIs do not "
+            "read, and copying it into this account was refused ({code}: {why}).{next_step}"
         ),
+        "copy_ami_denied": (
+            " The IAM policy must allow ec2:CopyImage (see docs/iam-policy.json), or copy it "
+            "with the command below and pass the copy with --baseline-ami. Or pass snapshots "
+            "you own with --baseline-snapshot, or compare with nothing using --no-baseline."
+        ),
+        "copy_ami_refused": (
+            " Pass snapshots you own with --baseline-snapshot, "
+            "or compare with nothing using --no-baseline."
+        ),
+        "ami_copy_failed": "the copy {copy} of the AMI failed: {why}",
         # --- progress ---
+        "copying_ami": (
+            "baseline: {image} is a public AMI, whose snapshots the EBS direct APIs do not "
+            "read: copying it into this account as {copy} (deleted at the end)"
+        ),
+        "waiting_for_copy": "waiting for the copy {copy} of the AMI (minutes)",
+        "copy_progress": "the copy of the AMI so far: {progress}",
         "creating_snapshots": "creating snapshots of {instance} (CreateSnapshots)",
         "waiting_for_snapshots": (
             "waiting for {count} snapshot(s) to complete (minutes, longer for large volumes)"
@@ -105,6 +119,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "could_not_delete": "warning: could not delete {snapshot}: {why}",
         "snapshots_left": "warning: stopped while deleting the snapshots; "
         "still there, delete them by hand: {ids}",
+        "keeping_copies": (
+            "keeping the AMI copies: {ids} (--baseline-ami takes them; deregister them "
+            "and delete their snapshots when done)"
+        ),
+        "deleting_copies": "deleting the AMI copies this run made, and their snapshots: {ids}",
+        "copies_deleted": "AMI copies deleted",
+        "copies_left": "warning: stopped while deleting the AMI copies; still there, "
+        "deregister them and delete their snapshots by hand: {ids}",
         # --- what there is to read, said before reading it ---
         "one_byte": "1 byte",
         "bytes": "{size} bytes",
@@ -242,7 +264,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "help_group_aws": "AWS",
         "help_region": "AWS region (default: from the AWS configuration)",
         "help_profile": "AWS profile name",
-        "help_keep_snapshots": "keep the snapshots --instance-id made",
+        "help_keep_snapshots": (
+            "keep the snapshots --instance-id made, and the copy made of a public AMI"
+        ),
         "help_parallel": (
             "snapshot blocks fetched at once (default: {default}): fewer on a "
             "slow line, more from inside AWS"
@@ -304,14 +328,28 @@ TEXTS: dict[str, dict[str, str]] = {
             "自分のスナップショットを --baseline-snapshot で渡すか、"
             "--no-baseline で比較なしにしてください。"
         ),
-        "blocks_copy_ami": (
-            "下のコマンドで AMI を自分のアカウントにコピーしてください"
-            "（コピーの ID が表示されます）。"
-            "コピーが完了したら（数分）、その ID を --baseline-ami で渡して、もう一度実行します。"
+        "cannot_copy_ami": (
+            "baseline: {image} は公開 AMI で、そのスナップショットは EBS direct API では"
+            "読み込めません。このアカウントへのコピーも拒否されました（{code}: {why}）。{next_step}"
+        ),
+        "copy_ami_denied": (
+            "IAM ポリシーで ec2:CopyImage を許可するか（docs/iam-policy.json を参照）、"
+            "下のコマンドでコピーして、そのコピーを --baseline-ami で渡してください。"
             "自分のスナップショットを --baseline-snapshot で渡すか、"
             "--no-baseline で比較なしにすることもできます。"
         ),
+        "copy_ami_refused": (
+            "自分のスナップショットを --baseline-snapshot で渡すか、"
+            "--no-baseline で比較なしにしてください。"
+        ),
+        "ami_copy_failed": "AMI のコピー {copy} が失敗しました: {why}",
         # --- progress ---
+        "copying_ami": (
+            "baseline: {image} は公開 AMI で、そのスナップショットは EBS direct API では"
+            "読み込めないため、このアカウントに {copy} としてコピーします（最後に削除します）"
+        ),
+        "waiting_for_copy": "AMI のコピー {copy} の完了を待ちます（数分）",
+        "copy_progress": "AMI のコピーの進捗: {progress}",
         "creating_snapshots": "{instance} のスナップショットを作成します（CreateSnapshots）",
         "waiting_for_snapshots": (
             "{count} 個のスナップショットの完了を待ちます"
@@ -331,6 +369,16 @@ TEXTS: dict[str, dict[str, str]] = {
         "could_not_delete": "警告: {snapshot} を削除できませんでした: {why}",
         "snapshots_left": "警告: スナップショットの削除が途中で止まりました。"
         "残っているものを手動で削除してください: {ids}",
+        "keeping_copies": (
+            "AMI のコピーを残します: {ids}（--baseline-ami で使えます。"
+            "使い終わったら登録を解除し、そのスナップショットを削除してください）"
+        ),
+        "deleting_copies": (
+            "この実行で作成した AMI のコピーとそのスナップショットを削除します: {ids}"
+        ),
+        "copies_deleted": "AMI のコピーを削除しました",
+        "copies_left": "警告: AMI のコピーの削除が途中で止まりました。残っているものの登録を"
+        "解除し、そのスナップショットを手動で削除してください: {ids}",
         # --- what there is to read, said before reading it ---
         "one_byte": "1 バイト",
         "bytes": "{size} バイト",
@@ -471,7 +519,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "help_group_aws": "AWS",
         "help_region": "AWS のリージョン（既定: AWS の設定から）",
         "help_profile": "AWS のプロファイル名",
-        "help_keep_snapshots": "--instance-id が作成したスナップショットを残す",
+        "help_keep_snapshots": (
+            "--instance-id が作成したスナップショットと、公開 AMI から作成したコピーを残す"
+        ),
         "help_parallel": (
             "スナップショットのブロックを同時に取得する数（既定: {default}）: "
             "回線が遅ければ減らし、AWS 内から実行するなら増やす"
@@ -511,6 +561,7 @@ LABELS: dict[str, dict[str, str]] = {
         "masked": "masked",
         "ebs_direct_api": "EBS direct API",
         "snapshots_made": "snapshots made",
+        "copies_made": "AMI copies made",
         "uploaded": "uploaded",
     },
     "ja": {
@@ -541,6 +592,7 @@ LABELS: dict[str, dict[str, str]] = {
         "masked": "マスク済み",
         "ebs_direct_api": "EBS direct API",
         "snapshots_made": "作成したスナップショット",
+        "copies_made": "作成した AMI のコピー",
         "uploaded": "アップロード先",
     },
 }

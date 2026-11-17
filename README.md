@@ -20,7 +20,7 @@ ec2-byhand --instance-id i-0123456789abcdef0 -o out/
 
 Both take the snapshots, compare them with the baseline and delete the snapshots they made. The result is in `out/`.
 
-A note on the second: when the launch AMI is a **public AMI** (Amazon Linux, Ubuntu, ...), it ends in an error. AWS does not let the snapshots behind a public AMI be read directly. Copy the AMI into your account and pass the copy with `--baseline-ami` ([the steps](#choosing-the-baseline)). An AMI of your own works as it is.
+A note on the second: when the launch AMI is a **public AMI** (Amazon Linux, Ubuntu, ...), whose snapshots AWS does not let be read directly, the run copies it into your account while it takes the snapshots, and deletes the copy at the end ([more](#choosing-the-baseline)).
 
 ```text
 out/
@@ -31,7 +31,8 @@ out/
 └── patches/        patches: what was changed in configuration files (for patch / git apply)
 ```
 
-It needs Python 3.12 or later. Credentials and region come from the same configuration the AWS CLI uses ([Permissions](#permissions)).
+It needs Python 3.12 or later. Where the Python is older (CloudShell, Amazon Linux 2023), `uv tool install --python 3.12 ec2-byhand` installs it with a Python of its own.
+Credentials and region come from the same configuration the AWS CLI uses ([Permissions](#permissions)).
 
 **Cost and time, roughly**: about 0.03 USD and 3 to 4 minutes, as measured on an Amazon Linux 2023 server with three volumes (117 GiB in all) and about 55,000 files; a run that writes the lists only read 4.5 GiB.
 The cost is mostly the EBS direct API reads, around 0.003 USD per 1,000 blocks (about 500 MiB). The snapshots are stored, and charged, only for the minutes of the run.
@@ -155,7 +156,7 @@ ec2-byhand --current-image server-root.img server-data.img --baseline-image ami-
 
 | | The server now | The baseline |
 |---|---|---|
-| An instance | `--instance-id` | its launch AMI, by default (a public AMI [needs a copy](#choosing-the-baseline)) |
+| An instance | `--instance-id` | its launch AMI, by default (a public AMI [is copied](#choosing-the-baseline)) |
 | An AMI | | `--baseline-ami` |
 | Snapshots | `--current-snapshot` | `--baseline-snapshot` |
 | Disk images | `--current-image` | `--baseline-image` |
@@ -174,7 +175,7 @@ With `--no-baseline` the results include the files the AMI itself provided. `ec2
 | `--include-sensitive` | archive the contents of secrets too, and leave secret-like strings unmasked |
 | `--no-archives` | write manifest.json and report.txt only |
 | `--upload s3://bucket/prefix` | also upload the outputs to S3 |
-| `--keep-snapshots` | keep the snapshots the run made |
+| `--keep-snapshots` | keep the snapshots the run made, and its copy of a public AMI |
 | `--profile` / `--region` | override the AWS configuration |
 | `--parallel N` | how many snapshot blocks to fetch at once (default 32) |
 | `--verify-checksums` | check the ext4 / XFS v5 metadata checksums |
@@ -185,7 +186,8 @@ Patterns match the whole absolute path (`'/opt/app/**'`, `'**/*.bak'`).
 
 ### Permissions
 
-[docs/iam-policy.json](https://github.com/gyuro-dev/ec2-byhand/blob/main/docs/iam-policy.json) is the least a run needs (checked on AWS). It may delete only the snapshots it tagged itself.
+[docs/iam-policy.json](https://github.com/gyuro-dev/ec2-byhand/blob/main/docs/iam-policy.json) is the least a run needs (checked on AWS). It may delete only the snapshots and AMI copies it tagged itself.
+Without `ec2:CopyImage` a public baseline AMI ends in an error that gives the `copy-image` command to run by hand.
 Snapshots encrypted with the default `aws/ebs` key need nothing more; with a customer managed key, its key policy must allow `kms:Decrypt`.
 For `--upload`, add [docs/iam-policy-upload.json](https://github.com/gyuro-dev/ec2-byhand/blob/main/docs/iam-policy-upload.json) (BUCKET and PREFIX are yours to fill in).
 
@@ -199,8 +201,9 @@ manifest.json is the same in both: it is data for programs and stays English, as
 ### The snapshots a run makes
 
 The wait for them has no limit (the first snapshot of a large volume can take hours) and says how far they are every few minutes.
-A run that is stopped (Ctrl+C, SIGTERM, a closed terminal or SSH session) deletes its snapshots on the way out.
-One that was killed outright leaves them, tagged `ec2-byhand=<instance id>`: `aws ec2 describe-snapshots --owner-ids self --filters Name=tag-key,Values=ec2-byhand` lists them.
+A run that is stopped (Ctrl+C, SIGTERM, a closed terminal or SSH session) deletes its snapshots and its AMI copy on the way out.
+One that was killed outright leaves them, tagged `ec2-byhand=<instance id>` (a copy and its snapshot `ec2-byhand=<the AMI copied>`):
+`aws ec2 describe-snapshots --owner-ids self --filters Name=tag-key,Values=ec2-byhand` and `aws ec2 describe-images --owners self --filters Name=tag-key,Values=ec2-byhand` list them.
 
 ### Choosing the baseline
 
@@ -210,22 +213,8 @@ and `--current-snapshot snap-<newer> --baseline-snapshot snap-<older>` what was 
 What cloud-init did at first boot is in the backup as well, so it no longer shows.
 
 **Public AMIs**: the EBS direct APIs do not read the snapshots behind a public AMI (AWS answers `Public snapshots are not supported`).
-Copy the AMI into your account and pass the copy with `--baseline-ami`, or use `--no-baseline`.
-The error ends with the `copy-image` command for that AMI and region.
-
-```bash
-# 1. Find the AMI the instance was launched from
-aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --query 'Reservations[].Instances[].ImageId' --output text
-
-# 2. Copy it into your account and wait for the copy (minutes)
-aws ec2 copy-image --source-region us-east-1 --source-image-id ami-0aaaaaaaaaaaaaaaa --name ec2-byhand-baseline
-aws ec2 wait image-available --image-ids ami-0bbbbbbbbbbbbbbbb
-
-# 3. Compare with the copy
-ec2-byhand --instance-id i-0123456789abcdef0 --baseline-ami ami-0bbbbbbbbbbbbbbbb -o out/
-```
-
-When done with the copy, deregister it (`aws ec2 deregister-image`) and delete its snapshot (`aws ec2 delete-snapshot`).
+So a public baseline AMI (the launch AMI, or `--baseline-ami`) is copied into your account, in the same region, and the copy's snapshots are read.
+With `--instance-id` the copy is made while the snapshots are taken; it is deleted at the end with its snapshot, like them (`--keep-snapshots` keeps it, and `--baseline-ami` takes it next time).
 Red Hat's RHEL AMIs cannot be copied (`You do not have permission to access the storage of this ami`): use `--no-baseline` for them.
 
 **dpkg (Ubuntu / Debian)**: dpkg records no permissions, owners or link targets, so a package file is compared with the baseline's copy only when its package has the same version on both sides.
@@ -250,7 +239,7 @@ report.txt holds nothing manifest.json does not.
 Each item carries its `ctime`, when it last changed (the kernel sets it; `touch` cannot), and the summary says between when and when the hand work was done.
 ACLs (`setfacl`), capabilities (`setcap`) and other extended attributes count as part of a path: one changed alone is reported (`changed: xattrs`), and `xattrs` names what a path carries; the archives keep the values.
 The SELinux label is compared as well: a `chcon` shows as `changed: selinux`, with the label the path has now. When only one side has labels at all (SELinux switched on or off since), that is not counted as a change of each path.
-This holds for hand-placed paths; the labels and attributes of package files are not compared (a package's own scripts set them).
+A package file's attributes (a `setcap` on `/usr/bin/node`, a `setfacl` on `/var/www`) are compared with the baseline's when its package is at the same version there (`problems: xattrs`): a package's own scripts set some, and an upgrade sets them again. Their SELinux labels are not compared.
 The outputs hold copies of files that may be root-only on the server: on Linux and macOS only you can read them; on Windows, protect the folder yourself.
 
 ### Large files, large servers

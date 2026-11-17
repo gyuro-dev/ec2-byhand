@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A public baseline AMI (Amazon Linux, Ubuntu, ...), whose snapshots the EBS direct APIs
+  do not read, is copied into the account and the copy read; with `--instance-id` the
+  copy is made while the snapshots are taken. The copy and its snapshot are deleted at
+  the end, like the snapshots (`--keep-snapshots` keeps them). The quick start's
+  `ec2-byhand --instance-id ID -o out/` now works on a server launched from a public AMI.
+  The IAM policy gains `ec2:CopyImage`, and `ec2:DeregisterImage` on what the run tagged;
+  without them the error gives the `copy-image` command to run by hand.
+- A `setcap`, `setfacl` or `setfattr` on a package file (`setcap cap_net_bind_service=+ep
+  /usr/bin/node`) is listed in `modified_package_files` with the problem `xattrs`: its
+  extended attributes, the SELinux label aside, are compared with the baseline's when its
+  package is at the same version there. Neither rpm nor dpkg records them.
+- README: `uv tool install --python 3.12 ec2-byhand` where the Python is older.
+
 ### Changed
 
 - `--instance-id` looks at the snapshots it waits for every 5 seconds, not 15: the
