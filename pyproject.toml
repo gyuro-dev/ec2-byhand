@@ -1,6 +1,6 @@
 [project]
 name = "ec2-byhand"
-version = "0.1.1"
+version = "0.2.0"
 description = "Extract hand-placed and hand-modified files from EC2 EBS snapshots without logging in"
 readme = "README.md"
 authors = [
