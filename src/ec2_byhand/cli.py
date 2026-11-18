@@ -230,11 +230,13 @@ def _warning_lines(warnings: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _plan_lines(plan: ReadPlan, max_file_size: int | None, snapshots_made: bool) -> list[str]:
+def _plan_lines(
+    plan: ReadPlan, max_file_size: int | None, snapshots_made: bool, copy_made: bool = False
+) -> list[str]:
     """What there is to read, said before reading it: one line, and when it is much,
     the largest files and how to leave them out. This is the moment to stop a run
-    that is about to read a database. With `snapshots_made` (--instance-id), stopping
-    also costs the snapshots, which the hint says."""
+    that is about to read a database. With `snapshots_made` (--instance-id) or
+    `copy_made` (a copy of a public AMI), stopping also costs those, which the hint says."""
     first = msg("plan", size=size_text(plan.size), files=plan.files)
     if plan.over_limit and max_file_size is not None:
         first += msg("plan_over_limit", count=plan.over_limit, limit=size_text(max_file_size))
@@ -242,7 +244,9 @@ def _plan_lines(plan: ReadPlan, max_file_size: int | None, snapshots_made: bool)
         return [first]
     largest = [f"  {size_text(size):>10}  {printable(path)}" for path, size in plan.largest]
     hint = msg("plan_hint")
-    if snapshots_made:
+    if copy_made:
+        hint += msg("plan_hint_copy")
+    elif snapshots_made:
         hint += msg("plan_hint_snapshots")
     return [first + msg("plan_largest"), *largest, hint]
 
@@ -448,6 +452,16 @@ class _Copying:
     copy: str
 
 
+@dataclass(frozen=True)
+class _MadeTexts:
+    """What the cleanup says of one kind of thing a run made (snapshots, AMI copies)."""
+
+    keeping: Callable[[str], str]
+    deleting: Callable[[str], str]
+    left: Callable[[str], str]
+    deleted: Callable[[], str]
+
+
 class _Aws:
     """The AWS side of one run: clients made on first use, snapshots and AMI copies it made."""
 
@@ -524,7 +538,10 @@ class _Aws:
             ) from err
         self.copies.append(copy)
         self._copy_snapshots[copy] = snapshots
-        _progress(self._args, msg("copying_ami", image=image_id, copy=copy))
+        if self._args.keep_snapshots:
+            _progress(self._args, msg("copying_ami_kept", image=image_id, copy=copy))
+        else:
+            _progress(self._args, msg("copying_ami", image=image_id, copy=copy))
         return _Copying(image_id, copy)
 
     def open_copy(self, copying: _Copying, verify: bool) -> Snapshot:
@@ -638,62 +655,64 @@ class _Aws:
         """Delete the snapshots and AMI copies this run made, unless asked to keep them,
         saying which: after an error or Ctrl+C nothing else tells whether they still
         cost money."""
+        from ec2_byhand.aws.snapshots import delete_image, delete_snapshots
+
+        disks = {d.snapshot_id: d for d in self.created}
         try:
-            self._cleanup_snapshots()
+            self._delete_made(
+                list(disks),
+                lambda s: [why for _, why in delete_snapshots(self.clients[0], [disks[s]])],
+                self.not_deleted,
+                _MadeTexts(
+                    lambda ids: msg("keeping_snapshots", ids=ids),
+                    lambda ids: msg("deleting_snapshots", ids=ids),
+                    lambda ids: msg("snapshots_left", ids=ids),
+                    lambda: msg("snapshots_deleted"),
+                ),
+            )
         finally:
-            self._cleanup_copies()
+            self._delete_made(
+                list(self.copies),
+                lambda c: delete_image(self.clients[0], c, self._copy_snapshots[c]),
+                self.copies_not_deleted,
+                _MadeTexts(
+                    lambda ids: msg("keeping_copies", ids=ids),
+                    lambda ids: msg("deleting_copies", ids=ids),
+                    lambda ids: msg("copies_left", ids=ids),
+                    lambda: msg("copies_deleted"),
+                ),
+            )
 
-    def _cleanup_copies(self) -> None:
-        """Deregister the AMI copies this run made, with their snapshots."""
-        from ec2_byhand.aws.snapshots import delete_image
-
-        if not self.copies:
+    def _delete_made(
+        self,
+        ids: list[str],
+        delete: Callable[[str], list[str]],
+        not_deleted: list[str],
+        texts: _MadeTexts,
+    ) -> None:
+        """Delete what this run made (`delete` returns what went wrong), one at a time
+        to know what is left if stopped, or keep it with --keep-snapshots. What is kept,
+        not deleted or left is said even with --quiet: it costs money until deleted, and
+        with --label nothing else names it."""
+        if not ids:
             return
-        ids = " ".join(self.copies)
         if self._args.keep_snapshots:
-            _say(msg("keeping_copies", ids=ids))  # even with --quiet: they cost money
+            _say(texts.keeping(" ".join(ids)))
             return
-        _progress(self._args, msg("deleting_copies", ids=ids))
-        left = list(self.copies)
+        _progress(self._args, texts.deleting(" ".join(ids)))
+        left = list(ids)
         try:
-            for copy in self.copies:
-                for why in delete_image(self.clients[0], copy, self._copy_snapshots[copy]):
-                    _say(msg("could_not_delete", snapshot=copy, why=why))
-                    if copy not in self.copies_not_deleted:
-                        self.copies_not_deleted.append(copy)
-                left.remove(copy)
+            for made in ids:
+                for why in delete(made):
+                    _say(msg("could_not_delete", snapshot=made, why=why))
+                    if made not in not_deleted:
+                        not_deleted.append(made)
+                left.remove(made)
         except BaseException:  # Ctrl+C again, or the session lost, while deleting
-            _say(msg("copies_left", ids=" ".join(left)))
+            _say(texts.left(" ".join(left)))
             raise
-        if not self.copies_not_deleted:
-            _progress(self._args, msg("copies_deleted"))
-
-    def _cleanup_snapshots(self) -> None:
-        """Delete the snapshots --instance-id made."""
-        from ec2_byhand.aws.snapshots import delete_snapshots
-
-        if not self.created:
-            return
-        ids = " ".join(d.snapshot_id for d in self.created)
-        if self._args.keep_snapshots:
-            # Even with --quiet: they cost money until deleted, and with --label nothing
-            # else names them.
-            _say(msg("keeping_snapshots", ids=ids))
-            return
-        _progress(self._args, msg("deleting_snapshots", ids=ids))
-        left = [d.snapshot_id for d in self.created]
-        try:
-            for d in self.created:  # one at a time, to know which are left if stopped
-                for _, why in delete_snapshots(self.clients[0], [d]):
-                    # Even with --quiet: a leaked snapshot costs money.
-                    _say(msg("could_not_delete", snapshot=d.snapshot_id, why=why))
-                    self.not_deleted.append(d.snapshot_id)
-                left.remove(d.snapshot_id)
-        except BaseException:  # Ctrl+C again, or the session lost, while deleting
-            _say(msg("snapshots_left", ids=" ".join(left)))
-            raise
-        if not self.not_deleted:
-            _progress(self._args, msg("snapshots_deleted"))
+        if not not_deleted:
+            _progress(self._args, texts.deleted())
 
 
 def _baseline_side(
@@ -822,7 +841,8 @@ def run(args: argparse.Namespace) -> int:
             _progress(args, msg("analyzing"))
 
         def say_plan(plan: ReadPlan) -> None:
-            for line in _plan_lines(plan, args.max_file_size, bool(aws.created)):
+            made = bool(aws.created), bool(aws.copies)
+            for line in _plan_lines(plan, args.max_file_size, *made):
                 _progress(args, line)
 
         m = analyze(

@@ -247,7 +247,7 @@ The outputs hold copies of files that may be root-only on the server: on Linux a
 Files over `--max-file-size` get no sha256 and stay out of the archives; against a baseline, size and mtime decide.
 Package and pip files over the limit are not checked against their recorded hashes (`content-not-verified` warning). The summary counts what the limit left unread.
 Before reading any content, the run says on stderr how much it is about to read in files no package owns; from 1 GiB on it names the largest ones:
-the moment to Ctrl+C and `--exclude` a data directory (with `--instance-id` this also deletes the snapshots just made; `--keep-snapshots` keeps them for a `--current-snapshot` run).
+the moment to Ctrl+C and `--exclude` a data directory (with `--instance-id` this also deletes the snapshots just made, and a copy of a public AMI too; `--keep-snapshots` keeps them for a run with `--current-snapshot` and `--baseline-ami`).
 
 Memory grows with the number of files on both sides, about 1.5 to 1.8 KB a path a side (measured: 300,000 files on each side take 0.9 GB on ext4 and 1.0 GB on XFS; a million on each side would need about 3 GB).
 With millions of files, leave the data directories out with `--exclude 'DIR/**'`: they are then not walked at all (any `--include` makes the run read everything).
