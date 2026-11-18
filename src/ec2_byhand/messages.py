@@ -96,10 +96,17 @@ TEXTS: dict[str, dict[str, str]] = {
             "or compare with nothing using --no-baseline."
         ),
         "ami_copy_failed": "the copy {copy} of the AMI failed: {why}",
+        "ami_copy_gone": (
+            "the copy {copy} of the AMI is not there (deregistered by someone else?)"
+        ),
         # --- progress ---
         "copying_ami": (
             "baseline: {image} is a public AMI, whose snapshots the EBS direct APIs do not "
             "read: copying it into this account as {copy} (deleted at the end)"
+        ),
+        "copying_ami_kept": (
+            "baseline: {image} is a public AMI, whose snapshots the EBS direct APIs do not "
+            "read: copying it into this account as {copy} (kept: --keep-snapshots)"
         ),
         "waiting_for_copy": "waiting for the copy {copy} of the AMI (minutes)",
         "copy_progress": "the copy of the AMI so far: {progress}",
@@ -141,6 +148,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "plan_hint_snapshots": (
             " (this also deletes the snapshots just made; "
             "--keep-snapshots keeps them for --current-snapshot)"
+        ),
+        "plan_hint_copy": (
+            " (this also deletes the AMI copy just made, and the snapshots if any; "
+            "--keep-snapshots keeps them, for --baseline-ami and --current-snapshot)"
         ),
         # --- --upload ---
         "no_such_bucket": "no such bucket: {bucket}",
@@ -347,10 +358,18 @@ TEXTS: dict[str, dict[str, str]] = {
             "--no-baseline で比較なしにしてください。"
         ),
         "ami_copy_failed": "AMI のコピー {copy} が失敗しました: {why}",
+        "ami_copy_gone": (
+            "AMI のコピー {copy} が見つかりません（ほかで登録を解除された可能性があります）"
+        ),
         # --- progress ---
         "copying_ami": (
             "baseline: {image} は公開 AMI で、そのスナップショットは EBS direct API では"
             "読み込めないため、このアカウントに {copy} としてコピーします（最後に削除します）"
+        ),
+        "copying_ami_kept": (
+            "baseline: {image} は公開 AMI で、そのスナップショットは EBS direct API では"
+            "読み込めないため、このアカウントに {copy} としてコピーします"
+            "（--keep-snapshots のため残します）"
         ),
         "waiting_for_copy": "AMI のコピー {copy} の完了を待ちます（数分）",
         "copy_progress": "AMI のコピーの進捗: {progress}",
@@ -399,6 +418,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "plan_hint_snapshots": (
             "（作成したばかりのスナップショットも削除されます。"
             "--keep-snapshots で残せば --current-snapshot で使えます）"
+        ),
+        "plan_hint_copy": (
+            "（作成したばかりの AMI のコピーも、スナップショットがあればそれも削除されます。"
+            "--keep-snapshots で残せば --baseline-ami と --current-snapshot で使えます）"
         ),
         # --- --upload ---
         "no_such_bucket": "バケットがありません: {bucket}",

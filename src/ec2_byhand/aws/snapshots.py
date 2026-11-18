@@ -217,36 +217,71 @@ def copy_image(ec2: Any, image_id: str) -> str:
     return str(resp["ImageId"])
 
 
+# What EC2 answers for an AMI it does not show yet: right after CopyImage, as its API
+# is eventually consistent.
+_NOT_VISIBLE_YET = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable")
+# How long a new copy may stay out of sight, and how long the snapshots of a copy
+# stopped half way are looked for after it is deregistered (the copy goes on making
+# them, and they appear seconds later).
+COPY_SECONDS = 120
+
+
+def _describe_image(ec2: Any, image_id: str) -> dict[str, Any] | None:
+    """The AMI `image_id` as DescribeImages shows it, or None if it is not shown."""
+    from botocore.exceptions import ClientError
+
+    try:
+        found = ec2.describe_images(ImageIds=[image_id])["Images"]
+    except ClientError as err:
+        if err.response.get("Error", {}).get("Code") not in _NOT_VISIBLE_YET:
+            raise
+        return None
+    return found[0] if found else None
+
+
 def wait_for_image(
-    ec2: Any, image_id: str, on_wait: Callable[[dict[str, str]], None] | None = None
+    ec2: Any,
+    image_id: str,
+    on_wait: Callable[[dict[str, str]], None] | None = None,
+    visible_seconds: float = COPY_SECONDS,
 ) -> None:
     """Wait until the AMI `image_id` (a copy being made) is available, however long
     that takes. `on_wait` is called after each look that found it unfinished, with
-    its state. A copy that fails raises AwsSourceError.
+    its state. A copy that fails, or that is not there (gone after it was seen, or
+    never seen within `visible_seconds`), raises AwsSourceError.
 
     AMI `image_id`（作成中のコピー）が使えるようになるまで、どれだけかかっても待つ。`on_wait`
-    は、見に行って未完了だったたびに状態を渡して呼ばれる。失敗したコピーは AwsSourceError。
+    は、見に行って未完了だったたびに状態を渡して呼ばれる。失敗したコピーと、見当たらないコピー
+    （一度見えた後に消えた、または `visible_seconds` 秒たっても見えない）は AwsSourceError。
     """
+    seen = False
+    deadline = time.monotonic() + visible_seconds
     while True:
-        found = ec2.describe_images(ImageIds=[image_id])["Images"]
-        state = found[0].get("State", "") if found else ""
-        if state == "available":
-            return
-        if state in ("failed", "error", "invalid", "deregistered", "disabled"):
-            why = found[0].get("StateReason", {}).get("Message") or state
-            raise AwsSourceError(msg("ami_copy_failed", copy=image_id, why=why))
+        image = _describe_image(ec2, image_id)
+        if image is None:
+            if seen or time.monotonic() >= deadline:
+                raise AwsSourceError(msg("ami_copy_gone", copy=image_id))
+            state = "pending"  # not shown yet
+        else:
+            seen = True
+            state = image.get("State", "")
+            if state == "available":
+                return
+            if state in ("failed", "error", "invalid", "deregistered", "disabled"):
+                why = image.get("StateReason", {}).get("Message") or state
+                raise AwsSourceError(msg("ami_copy_failed", copy=image_id, why=why))
         if on_wait is not None:
             on_wait({image_id: state})
         time.sleep(POLL_SECONDS)
 
 
-# How long the snapshots of a copy stopped half way are looked for, after the copy is
-# deregistered: the copy goes on making them, and they appear seconds later.
-COPY_SNAPSHOTS_SECONDS = 120
+# What DeleteSnapshot answers for a snapshot of a copy that is still being made, or
+# still part of the copy a moment after it was deregistered: asked again.
+_SNAPSHOT_NOT_YET = ("IncorrectState", "InvalidSnapshot.InUse")
 
 
 def delete_image(
-    ec2: Any, image_id: str, snapshots: int, wait_seconds: float = COPY_SNAPSHOTS_SECONDS
+    ec2: Any, image_id: str, snapshots: int, wait_seconds: float = COPY_SECONDS
 ) -> list[str]:
     """Deregister the AMI copy `image_id` this run made and delete its `snapshots`
     snapshots. Returns what went wrong, for the caller to report, rather than raising:
@@ -254,19 +289,29 @@ def delete_image(
 
     A copy deregistered before it was available (the run stopped while waiting for it)
     has its snapshots made all the same, not yet part of it: they are looked for by the
-    description AWS gives them, for at most `wait_seconds`.
+    description AWS gives them, for at most `wait_seconds`. So long, too, is a copy just
+    made waited for, should EC2 not show it yet.
 
     この実行で作った AMI のコピー `image_id` を登録解除し、その `snapshots` 個のスナップショット
     を消す。失敗は raise せず、呼び出し側が報告できるように返す: 残ったコピーは消すまで課金される。
     完成前に登録解除したコピー（完了待ちの途中で止めた実行）のスナップショットは、まだコピーに
     結び付いていないまま作られ続けるので、AWS が付ける説明で最大 `wait_seconds` 秒探して消す。
+    作ったばかりで EC2 がまだ見せないコピーも、同じだけ待つ。
     """
     from botocore.exceptions import BotoCoreError, ClientError
 
-    try:
-        resp = ec2.deregister_image(ImageId=image_id, DeleteAssociatedSnapshots=True)
-    except (BotoCoreError, ClientError) as err:
-        return [str(err)]
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            resp = ec2.deregister_image(ImageId=image_id, DeleteAssociatedSnapshots=True)
+            break
+        except ClientError as err:
+            code = err.response.get("Error", {}).get("Code")
+            if code not in _NOT_VISIBLE_YET or time.monotonic() >= deadline:
+                return [str(err)]
+        except BotoCoreError as err:
+            return [str(err)]
+        time.sleep(POLL_SECONDS)
     problems = []
     deleted = set()
     for r in resp.get("DeleteSnapshotResults", []):
@@ -274,7 +319,7 @@ def delete_image(
             deleted.add(r.get("SnapshotId"))
         else:
             problems.append(f"{r.get('SnapshotId', '?')}: {r.get('ReturnCode', '?')}")
-    deadline = time.monotonic() + wait_seconds
+    refused: set[str] = set()  # snapshots whose deletion was refused: reported once
     while len(deleted) + len(problems) < snapshots:
         # As AWS described them on 2026-11-17: "Copied for DestinationAmi ami-... from
         # SourceAmi ami-... for SourceSnapshot snap-.... Task created on ..."
@@ -286,13 +331,18 @@ def delete_image(
         except (BotoCoreError, ClientError) as err:
             return [*problems, str(err)]
         for s in found:
-            if s["SnapshotId"] in deleted:
+            snapshot = s["SnapshotId"]
+            if snapshot in deleted or snapshot in refused:
                 continue
             try:
-                ec2.delete_snapshot(SnapshotId=s["SnapshotId"])
-            except ClientError:
-                continue  # still being made: tried again
-            deleted.add(s["SnapshotId"])
+                ec2.delete_snapshot(SnapshotId=snapshot)
+            except ClientError as err:
+                if err.response.get("Error", {}).get("Code") in _SNAPSHOT_NOT_YET:
+                    continue  # still being made: tried again
+                refused.add(snapshot)  # denied, or anything else: said as it is
+                problems.append(f"{snapshot}: {err}")
+                continue
+            deleted.add(snapshot)
         if len(deleted) + len(problems) >= snapshots:
             break
         if time.monotonic() >= deadline:

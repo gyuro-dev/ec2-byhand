@@ -1374,6 +1374,69 @@ def _paths(problems: list) -> dict[str, set[str]]:
     return {x.path: set(x.problems) for x in problems}
 
 
+class _BrokenXattrs(MemFs):
+    """A MemFs whose extended attributes cannot be read at `path` (a damaged EA block)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self._broken = path
+
+    def xattrs(self, ino: int) -> dict[str, bytes]:
+        if ino == self.ino(self._broken):
+            raise DiskReadError("inode: bad extended attribute block")
+        return super().xattrs(ino)
+
+
+def test_setcap_on_an_rpm_package_file_is_shown() -> None:
+    # On Amazon Linux and the RHEL family the database is rpm's: the same comparison.
+    files = (_recorded("/usr/bin/node", b"node"), _recorded("/usr/bin/plain", b"plain"))
+    before, after = MemFs(), MemFs()
+    for fs in (before, after):
+        fs.add_file("/usr/bin/node", b"node")
+        fs.add_file("/usr/bin/plain", b"plain")
+    after.set_xattr("/usr/bin/node", "security.capability", CAP_NET_BIND_SERVICE)
+    after.set_xattr("/usr/bin/plain", "security.sehash", bytes(32))
+    db = _rpm_db(files)
+    problems = verify_packages(
+        SystemSource.from_fs(after), db, SystemSource.from_fs(before), base_db=db
+    )
+    assert _paths(problems) == {"/usr/bin/node": {"xattrs"}}
+    # A package at another version in the baseline is not compared.
+    older = dataclasses.replace(db, packages=(dataclasses.replace(db.packages[0], version="0"),))
+    assert (
+        verify_packages(
+            SystemSource.from_fs(after), db, SystemSource.from_fs(before), base_db=older
+        )
+        == []
+    )
+
+
+def test_unreadable_xattrs_do_not_hide_a_changed_package_file() -> None:
+    before = _BrokenXattrs("/usr/bin/node")
+    after = MemFs()
+    before.add_file("/usr/bin/node", b"node")
+    after.add_file("/usr/bin/node", b"NODE")  # same size: content alone
+    db = _rpm_db((_recorded("/usr/bin/node", b"node"),))
+    (problem,) = verify_packages(
+        SystemSource.from_fs(after), db, SystemSource.from_fs(before), base_db=db
+    )
+    assert set(problem.problems) == {"content", "unreadable"}
+    assert problem.error == "extended attributes: inode: bad extended attribute block"
+
+
+def test_selinux_restorecon_digest_is_not_a_change_of_a_hand_placed_path() -> None:
+    before, after = MemFs(), MemFs()
+    for fs in (before, after):
+        fs.add_dir("/opt/app")
+        fs.add_dir("/opt/tool")
+    after.set_xattr("/opt/app", "security.sehash", bytes(32))  # a recursive restorecon
+    after.set_xattr("/opt/tool", "user.owner", b"ops")  # a setfattr by hand
+    item = _items(analyze(_snap(after), _snap(before)))
+    assert "/opt/app" not in item
+    assert item["/opt/tool"]["changed"] == ["xattrs"]
+    assert item["/opt/tool"]["xattrs"] == ["user.owner"]
+
+
 def test_contents_are_read_in_inode_order_not_package_order() -> None:
     fs = MemFs()
     names = ["/a", "/b", "/c", "/d"]
@@ -1921,6 +1984,12 @@ def test_much_to_read_names_the_largest_files_and_the_way_out() -> None:
         " (this also deletes the snapshots just made; "
         "--keep-snapshots keeps them for --current-snapshot)"
     )
+    # A copy of a public AMI too, which a rerun takes with --baseline-ami.
+    for snapshots_made in (True, False):
+        assert cli._plan_lines(much, GIB, snapshots_made, copy_made=True)[-1] == hint + (
+            " (this also deletes the AMI copy just made, and the snapshots if any; "
+            "--keep-snapshots keeps them, for --baseline-ami and --current-snapshot)"
+        )
 
 
 def test_the_plan_opens_only_the_largest_files() -> None:

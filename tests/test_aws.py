@@ -777,6 +777,85 @@ def test_a_copy_snapshot_that_does_not_appear_is_reported(ec2, monkeypatch) -> N
     assert problems == [left]
 
 
+def _not_found(stub: Stubber, operation: str, params: dict) -> None:
+    """What EC2 answers for an AMI just made, which it does not show yet."""
+    stub.add_client_error(
+        operation, "InvalidAMIID.NotFound", "does not exist", expected_params=params
+    )
+
+
+def _fake_clock(monkeypatch, times: list[float]) -> None:
+    clock = iter(times)
+    monkeypatch.setattr(snapshots_module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(snapshots_module.time, "sleep", lambda s: None)
+
+
+def test_a_copy_not_shown_yet_is_waited_for(ec2, monkeypatch) -> None:
+    client, stub = ec2
+    params = {"ImageIds": ["ami-0copy"]}
+    _not_found(stub, "describe_images", params)  # right after CopyImage
+    stub.add_response("describe_images", _image_response("ami-0copy", "s", "pending"), params)
+    stub.add_response("describe_images", _image_response("ami-0copy", "s", "available"), params)
+    _fake_clock(monkeypatch, [0.0, 1.0])
+    looks: list[dict[str, str]] = []
+    snapshots_module.wait_for_image(client, "ami-0copy", looks.append)
+    assert looks == [{"ami-0copy": "pending"}, {"ami-0copy": "pending"}]
+
+
+@pytest.mark.parametrize("seen", [True, False])
+def test_a_copy_that_is_not_there_ends_the_wait(ec2, monkeypatch, seen: bool) -> None:
+    client, stub = ec2
+    params = {"ImageIds": ["ami-0copy"]}
+    if seen:  # deregistered by someone else while it was made
+        stub.add_response("describe_images", _image_response("ami-0copy", "s", "pending"), params)
+        stub.add_response("describe_images", {"Images": []}, params)
+        times = [0.0, 1.0]
+    else:  # never shown, for longer than EC2 takes to show a new AMI
+        _not_found(stub, "describe_images", params)
+        times = [0.0, 500.0]
+    _fake_clock(monkeypatch, times)
+    with pytest.raises(AwsSourceError, match="ami-0copy of the AMI is not there"):
+        snapshots_module.wait_for_image(client, "ami-0copy")
+
+
+def test_a_copy_not_shown_yet_is_deregistered_once_it_is(ec2, monkeypatch) -> None:
+    client, stub = ec2
+    params = {"ImageId": "ami-0copy", "DeleteAssociatedSnapshots": True}
+    _not_found(stub, "deregister_image", params)
+    stub.add_response(
+        "deregister_image",
+        {"Return": True, "DeleteSnapshotResults": [{"SnapshotId": "s", "ReturnCode": "success"}]},
+        params,
+    )
+    _fake_clock(monkeypatch, [0.0, 1.0])
+    assert snapshots_module.delete_image(client, "ami-0copy", 1) == []
+
+
+def test_a_refused_snapshot_deletion_is_said_at_once(ec2, monkeypatch) -> None:
+    client, stub = ec2
+    stub.add_response(
+        "deregister_image",
+        {"Return": True, "DeleteSnapshotResults": []},
+        {"ImageId": "ami-0copy", "DeleteAssociatedSnapshots": True},
+    )
+    stub.add_response(
+        "describe_snapshots",
+        {"Snapshots": [{"SnapshotId": "snap-copy", "State": "completed"}]},
+        _copy_snapshots_params(),
+    )
+    # Not a snapshot still being made: no two-minute wait, and the cause as it is.
+    stub.add_client_error(
+        "delete_snapshot",
+        "UnauthorizedOperation",
+        "not authorized",
+        expected_params={"SnapshotId": "snap-copy"},
+    )
+    _fake_clock(monkeypatch, [0.0])
+    (problem,) = snapshots_module.delete_image(client, "ami-0copy", 1)
+    assert problem.startswith("snap-copy: ")
+    assert "UnauthorizedOperation" in problem
+
+
 @pytest.mark.parametrize("keep", [False, True])
 def test_the_copy_is_deleted_when_the_run_is_stopped(
     ec2, monkeypatch, tmp_path: Path, capsys, keep: bool

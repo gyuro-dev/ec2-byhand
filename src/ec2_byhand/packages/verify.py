@@ -461,7 +461,7 @@ def verify_packages(
         same_version = {(p.name, p.arch, p.evr) for p in base_db.packages}
     reader = _ContentReader(limits or ReadLimits())
 
-    def check_every_file() -> list[FileProblem]:
+    def check_every_file(planning: bool) -> list[FileProblem]:
         compared: set[str] = set()  # a directory is listed by many packages: report it once
         attrs_compared: set[str] = set()
         out = []
@@ -481,11 +481,22 @@ def verify_packages(
                         if baseline is not None and against_baseline and f.path not in compared:
                             compared.add(f.path)
                             problems |= _dpkg_since_baseline(src, f, baseline, reader)
-                    if baseline is not None and against_baseline and f.path not in attrs_compared:
-                        attrs_compared.add(f.path)
-                        problems |= _xattrs_since_baseline(src, f, baseline)
                 except DiskReadError as err:  # damaged metadata: cannot tell, so say so
                     problems, error = {"unreadable"}, str(err)
+                # Read no content, so not needed to plan the reads. On its own: attributes
+                # that cannot be read must not hide what was found of the file itself.
+                if (
+                    not planning
+                    and baseline is not None
+                    and against_baseline
+                    and f.path not in attrs_compared
+                ):
+                    attrs_compared.add(f.path)
+                    try:
+                        problems |= _xattrs_since_baseline(src, f, baseline)
+                    except DiskReadError as err:
+                        problems.add("unreadable")
+                        error = error or f"extended attributes: {err}"
                 if problems:
                     out.append(
                         FileProblem(
@@ -502,9 +513,9 @@ def verify_packages(
 
     # The same checks twice, so that what gets read cannot differ from what they need:
     # the first time only notes the contents, which are then read in inode order.
-    check_every_file()
+    check_every_file(planning=True)
     reader.read_planned()
-    return check_every_file()
+    return check_every_file(planning=False)
 
 
 def physical_path(src: SystemSource, path: str, parents: dict[str, str] | None = None) -> str:
