@@ -14,6 +14,10 @@ normalize:
   - {pattern: 'changed between: +\d{4}-\d\d-\d\d \d\d:\d\d and \d{4}-\d\d-\d\d \d\d:\d\d UTC',
      replace: 'changed between:        DATE and DATE UTC'}
   - {pattern: 'noise: +\d+', replace: 'noise:                  N'}
+  # 読む量の見積もりもイメージを作った環境で変わる（手元と runner で 2 MiB / 1.9 MiB）。
+  # ファイル数も noise と同じく Docker の足すファイルで変わりうるので固定しない
+  - {pattern: 'will read up to [\d.]+ \w+ in \d+ files',
+     replace: 'will read up to SIZE in N files'}
 
 cases:
   - group: 解析
