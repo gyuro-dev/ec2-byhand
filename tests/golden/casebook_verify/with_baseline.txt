@@ -22,4 +22,4 @@ skipped:                1 (see manifest archives.skipped)
 warning: unresolved-mount (current / LABEL=/): device not found among the scanned volumes
 warning: unresolved-mount (baseline / LABEL=/): device not found among the scanned volumes
 ----- stderr -----
-ec2-byhand: will read up to 2 MiB in 142 files that no package owns
+ec2-byhand: will read up to SIZE in N files that no package owns

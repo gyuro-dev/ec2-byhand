@@ -20,4 +20,4 @@ noise:                  N
 warning: no-baseline: no baseline snapshot: results include files the AMI itself provided, not only changes made since
 warning: unresolved-mount (current / LABEL=/): device not found among the scanned volumes
 ----- stderr -----
-ec2-byhand: will read up to 2 MiB in 141 files that no package owns
+ec2-byhand: will read up to SIZE in N files that no package owns
